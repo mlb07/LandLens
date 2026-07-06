@@ -9,6 +9,7 @@ import { fetchOfficialSiteData, type OfficialSiteData } from './data/officialDat
 import { fetchParcelAt, formatParcelAcres } from './data/parcelProvider'
 import { fetchParcelOverlays, type ParcelOverlayData } from './data/parcelOverlayProvider'
 import { fetchRegionalHazards, type RegionalHazardData } from './data/regionalHazardProvider'
+import { registerDefaultLocalAdapters } from './data/localAdapters'
 import { getStateDefinition, stateDefinitions } from './data/states'
 import { analyzeSite } from './lib/scoring'
 import { loadSites, saveSites } from './lib/storage'
@@ -21,6 +22,10 @@ type PanelTab = 'details' | 'analysis'
 const INITIAL_STATE_CODE = 'TX'
 const INITIAL_STATE = getStateDefinition(INITIAL_STATE_CODE)
 const INITIAL_COORDINATES: Coordinates = INITIAL_STATE.center
+
+// Register verified local jurisdiction adapters (Travis County easements,
+// etc.). Idempotent — safe to call once at module load.
+registerDefaultLocalAdapters()
 
 function App() {
   const [view, setView] = useState<View>('explorer')
@@ -146,7 +151,7 @@ function App() {
       overlaysRef.current = data
       setOverlays(data)
       setAnalysis(analyzeSite(coordinates, inputsRef.current, officialDataRef.current, true, data, hazardsRef.current))
-    }).then((data) => {
+    }, activeStateCode).then((data) => {
       if (!current) return
       overlaysRef.current = data
       setOverlays(data)
@@ -160,7 +165,7 @@ function App() {
       current = false
       controller.abort()
     }
-  }, [coordinates, parcelBoundary])
+  }, [coordinates, parcelBoundary, activeStateCode])
 
   // Fetch regional hazards (sea-level rise, wildfire, radon) alongside official data.
   useEffect(() => {

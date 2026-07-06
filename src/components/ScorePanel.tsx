@@ -27,7 +27,7 @@ export function ScorePanel({ analysis, dirty, loading, pendingSources = 0, fetch
   return (
     <div className="score-panel">
       {pendingSources > 0 && <div className="analysis-updating"><LoaderCircle className="spin" size={14} /> Score ready · {pendingSources} {pendingSources === 1 ? 'source is' : 'sources are'} still updating</div>}
-      {parcelOverlaysLoading && <div className="analysis-updating parcel-overlay-loading"><LoaderCircle className="spin" size={14} /> Running parcel-wide flood, wetland & slope overlays…</div>}
+      {parcelOverlaysLoading && <div className="analysis-updating parcel-overlay-loading"><LoaderCircle className="spin" size={14} /> Running parcel-wide flood, wetland, slope, soils, stormwater, easement, EPA contamination & USFWS critical-habitat overlays…</div>}
       {dirty && <div className="stale-score"><AlertTriangle size={15} /> Inputs changed. Update the score to include them.</div>}
       <section className={`score-hero ${analysis.verdictTone}`}>
         <div className={`score-ring ${hasScore ? '' : 'unscored'}`} style={{ '--score': analysis.finalScore ?? 0 } as React.CSSProperties}>
@@ -76,7 +76,7 @@ export function ScorePanel({ analysis, dirty, loading, pendingSources = 0, fetch
         </section>
       )}
 
-      <div className="point-screen-note"><MapPinned size={16} /><div><strong>{hasParcelOverlays ? 'Parcel-wide overlays active' : 'Point screening'}</strong><span>{hasParcelOverlays ? 'FEMA, NWI, and slope are computed across the full parcel boundary. All 13 categories are now wired to sources.' : 'Results describe the selected point and nearby terrain — not the full parcel. Parcel-wide overlays are the next accuracy step.'}</span></div></div>
+      <div className="point-screen-note"><MapPinned size={16} /><div><strong>{hasParcelOverlays ? 'Parcel-wide overlays active' : 'Point screening'}</strong><span>{hasParcelOverlays ? 'FEMA, NWI, slope, NRCS soils, USGS-3DEP stormwater drainage, local easements (where registered), EPA FRS contamination, and USFWS critical habitat are computed across the full parcel boundary. Net developable acreage subtracts floodway, wetlands, steep slope, hydric/severe soils, and mapped easements; contamination and critical habitat are hard gates (not land-use takeouts).' : 'Results describe the selected point and nearby terrain — not the full parcel. Parcel-wide overlays are the next accuracy step.'}</span></div></div>
 
       <div className="section-heading">
         <div><span className="eyebrow">Transparent scoring</span><h3>{hasScore ? `Why this site scored ${analysis.finalScore}` : 'Not enough verified evidence to score'}</h3></div>

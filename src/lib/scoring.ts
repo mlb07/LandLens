@@ -1,5 +1,5 @@
 import type { OfficialSiteData } from '../data/officialDataProvider'
-import type { ParcelOverlayData } from '../data/parcelOverlayProvider'
+import type { ParcelOverlayData, SoilsOverlay, StormwaterOverlay, EasementsOverlay, ContaminationOverlay, SpeciesOverlay } from '../data/parcelOverlayProvider'
 import type { RegionalHazardData } from '../data/regionalHazardProvider'
 import type { Coordinates, HardGate, IntendedUse, MetricResult, ScoreCategory, SiteAnalysis, SiteInputs, VerdictTone } from '../types/site'
 
@@ -113,12 +113,15 @@ function netDevelopableMetric(inputs: SiteInputs, hasParcelBoundary: boolean, ov
     const nd = overlays.netDevelopable
     const ratio = nd.netToGrossRatio
     const score = ratio >= 0.85 ? 92 : ratio >= 0.70 ? 82 : ratio >= 0.50 ? 62 : ratio >= 0.35 ? 40 : 20
+    const subtractedSoils = nd.soilConstrainedAcres > 0
+    const subtractedEasements = nd.easementAcres > 0
+    const breakdown = `Gross ${nd.grossAcres} ac minus floodway ${nd.floodwayAcres} ac, wetlands ${nd.wetlandAcres} ac, steep slope (>20%) ${nd.steepSlopeAcres} ac${subtractedSoils ? `, hydric/severe soils ${nd.soilConstrainedAcres} ac` : ''}${subtractedEasements ? `, mapped easements/ROW ${nd.easementAcres} ac` : ''} = constrained ${nd.constrainedAcres} ac. Net developable ${nd.netDevelopableAcres} ac. Based on ${nd.samplePoints} grid sample points. Does not subtract setbacks, buffers, or unusable geometry.`
     return {
       category: 'netDevelopable', label: CATEGORY_LABELS.netDevelopable, score, weight: CATEGORY_WEIGHTS.netDevelopable,
-      status: 'official', provenance: { source: 'Parcel overlay calculation', sourceUrl: '#', vintage: 'Computed from FEMA, NWI, and USGS overlays', coverageNote: 'Net developable is gross acres minus the union of floodway, wetlands, and steep slope (>20%). Does not include setbacks, buffers, easements, or unusable geometry.' },
+      status: 'official', provenance: { source: 'Parcel overlay calculation', sourceUrl: '#', vintage: 'Computed from FEMA, NWI, USGS, NRCS soils, and local easements overlays', coverageNote: `Net developable is gross acres minus the union of floodway, wetlands, steep slope (>20%), hydric/severe soils${subtractedEasements ? ', and recorded easements' : ''}. Does not include setbacks, buffers, or unusable geometry.` },
       displayValue: `${nd.netDevelopableAcres} net / ${nd.grossAcres} gross`,
       summary: ratio >= 0.70 ? `Net developable ratio is ${Math.round(ratio * 100)}% — strong.` : ratio >= 0.50 ? `Net developable ratio is ${Math.round(ratio * 100)}% — workable but constrained.` : `Net developable ratio is ${Math.round(ratio * 100)}% — heavily constrained.`,
-      detail: `Gross ${nd.grossAcres} ac minus floodway ${nd.floodwayAcres} ac, wetlands ${nd.wetlandAcres} ac, steep slope (>20%) ${nd.steepSlopeAcres} ac = constrained ${nd.constrainedAcres} ac. Net developable ${nd.netDevelopableAcres} ac. Based on ${nd.samplePoints} grid sample points. Does not subtract setbacks, easements, buffers, or unusable shape.`,
+      detail: breakdown,
     }
   }
   // Fall back to gross-acreage user input.
@@ -136,8 +139,8 @@ function netDevelopableMetric(inputs: SiteInputs, hasParcelBoundary: boolean, ov
   if (inputs.intendedUse === 'commercial' && acres < 0.5) score = Math.min(score, 35)
   return userMetric(
     'netDevelopable', score, `${acres} acres (gross)`,
-    'Gross acreage from your input — net developable is lower once floodplain, wetlands, steep slope, buffers, and easements are subtracted.',
-    'This is a gross-acreage placeholder. True net developable acreage requires parcel-wide FEMA, NWI, slope, buffer, and easement overlays.',
+    'Gross acreage from your input — net developable is lower once floodplain, wetlands, steep slope, hydric/severe soils, and easements are subtracted.',
+    'This is a gross-acreage placeholder. True net developable acreage requires parcel-wide FEMA, NWI, slope, soil, and easement overlays.',
   )
 }
 
@@ -351,7 +354,19 @@ function marketMetric(demographics?: OfficialSiteData['demographics'], bps?: Off
 
 // ---------- Stormwater metric (USGS 3DEP drainage proxy) ----------
 
-function stormwaterMetric(data?: OfficialSiteData['stormwater']): MetricResult {
+function stormwaterMetric(data?: OfficialSiteData['stormwater'], overlay?: StormwaterOverlay): MetricResult {
+  // Prefer parcel-wide overlay when available.
+  if (overlay?.available && overlay.value) {
+    const v = overlay.value
+    const score = v.screeningLevel === 'good' ? 85 : v.screeningLevel === 'moderate' ? 62 : v.screeningLevel === 'challenging' ? 35 : 50
+    return {
+      category: 'stormwater', label: CATEGORY_LABELS.stormwater, score, weight: CATEGORY_WEIGHTS.stormwater,
+      status: 'official', provenance: overlay.provenance,
+      displayValue: `${v.screeningLevel} · drains ${v.drainageDirection} · ${v.flatnessIndex === 1 ? 'flat' : v.flatnessIndex > 0.5 ? 'moderate' : 'sloped'}`,
+      summary: v.screeningLevel === 'good' ? 'Parcel-wide terrain drains with moderate slope — favorable for stormwater.' : v.screeningLevel === 'moderate' ? 'Parcel-wide terrain drains but is relatively flat — detention may need careful design.' : v.screeningLevel === 'challenging' ? 'Parcel-wide terrain is flat with no clear outfall — stormwater design will be challenging.' : 'Parcel drainage could not be determined from available elevation samples.',
+      detail: `Parcel-wide drainage analysis across ${v.samplePoints} sampled cells on a ${v.spacingMeters}m grid shared with the slope overlay. Dominant drainage direction: ${v.drainageDirection}. Slope to parcel low point: ${v.slopeTowardLowPoint}%. Flatness index: ${v.flatnessIndex} (1=flat, 0=sloped). Positive outfall: ${v.hasPositiveOutfall ? 'yes' : 'no'}. Detention suitability: ${v.estimatedDetentionSuitability}. This shares the USGS elevation grid with the slope overlay and is a screening proxy, not a civil stormwater concept or outfall survey. Local stormwater criteria and a civil concept plan are required.`,
+    }
+  }
   if (!data?.available || !data.value) {
     return missingMetric(
       'stormwater',
@@ -374,7 +389,19 @@ function stormwaterMetric(data?: OfficialSiteData['stormwater']): MetricResult {
 
 // ---------- Easements metric (local GIS / title) ----------
 
-function easementsMetric(data?: OfficialSiteData['easements']): MetricResult {
+function easementsMetric(data?: OfficialSiteData['easements'], overlay?: EasementsOverlay): MetricResult {
+  // Prefer parcel-wide overlay when available.
+  if (overlay?.available && overlay.value) {
+    const v = overlay.value
+    const score = v.easementFraction > 0.02 ? 40 : v.easementTypes.length > 0 && v.easementTypes[0] !== 'none flag' ? 55 : 78
+    return {
+      category: 'easements', label: CATEGORY_LABELS.easements, score, weight: CATEGORY_WEIGHTS.easements,
+      status: 'official', provenance: overlay.provenance,
+      displayValue: v.easementFraction > 0 ? `${Math.round(v.easementFraction * 100)}% of parcel${v.easementTypes.length && v.easementTypes[0] !== 'none flag' ? ` · ${v.easementTypes.join(', ')}` : ''}` : 'No mapped easements on parcel',
+      summary: v.easementFraction > 0.02 ? `${Math.round(v.easementFraction * 100)}% of the parcel is covered by locally mapped easements/ROW.` : v.easementTypes.length && v.easementTypes[0] !== 'none flag' ? `Local GIS shows an easement flag on the parcel (${v.easementTypes.join(', ')}); no easement polygon geometry returned.` : 'No mapped easements intersect the parcel.',
+      detail: `Parcel-wide easement/ROW overlay across ${v.samplePoints} grid points against ${v.sourceLayer}. Easement fraction: ${Math.round(v.easementFraction * 100)}%. Local GIS easement data is approximate and may not reflect all recorded easements, covenants, or dedications. A title commitment and ALTA/NSPS land title survey are the authoritative source and are still required before acquisition.`,
+    }
+  }
   if (!data?.available || !data.value) {
     return missingMetric(
       'easements',
@@ -397,7 +424,30 @@ function easementsMetric(data?: OfficialSiteData['easements']): MetricResult {
 
 // ---------- Soils metric (NRCS SSURGO/SDA) ----------
 
-function soilsMetric(data?: OfficialSiteData['soils']): MetricResult {
+function soilsMetric(data?: OfficialSiteData['soils'], overlay?: SoilsOverlay): MetricResult {
+  // Prefer parcel-wide overlay when available.
+  if (overlay?.available && overlay.value) {
+    const v = overlay.value
+    const severe = v.dominantRating === 'severe'
+    const moderate = v.dominantRating === 'moderate'
+    // Weight the score by the share of the parcel that is unfavorable:
+    // severeFraction is the most damaging, then moderateFraction.
+    const score = severe && v.severeFraction > 0.25 ? 18
+      : severe ? 35
+        : moderate && v.moderateFraction > 0.25 ? 45
+          : moderate ? 58
+            : v.dominantRating === 'slight' ? 85
+              : v.dominantRating === 'unknown' ? 60
+                : 60
+    const topSoils = Object.entries(v.soilTypeCounts).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, share]) => `${name} (${Math.round((share || 0) * 100)}%)`).join('; ')
+    return {
+      category: 'soils', label: CATEGORY_LABELS.soils, score, weight: CATEGORY_WEIGHTS.soils,
+      status: 'official', provenance: overlay.provenance,
+      displayValue: `${v.dominantRating === 'severe' ? 'Severe' : v.dominantRating === 'moderate' ? 'Moderate' : v.dominantRating === 'slight' ? 'Slight' : v.dominantRating === 'unknown' ? 'Not rated' : 'Not rated'} · hydric ${Math.round(v.hydricFraction * 100)}% · severe ${Math.round(v.severeFraction * 100)}%`,
+      summary: severe ? `${Math.round(v.severeFraction * 100)}% of the parcel has severe NRCS septic/dwelling ratings.${v.hydricFraction > 0 ? ` ${Math.round(v.hydricFraction * 100)}% is hydric.` : ''}` : moderate ? `${Math.round(v.moderateFraction * 100)}% of the parcel has moderate NRCS ratings.` : v.dominantRating === 'slight' ? 'NRCS ratings are favorable across most of the parcel.' : 'NRCS soils coverage unavailable for this parcel.',
+      detail: `Parcel-wide soil map-unit query across NRCS intersecting ${v.samplePoints} grid points. Dominant rating: ${v.dominantRating}. Hydric fraction: ${Math.round(v.hydricFraction * 100)}%. Severe fraction: ${Math.round(v.severeFraction * 100)}%. Moderate fraction: ${Math.round(v.moderateFraction * 100)}%. Top map units by share: ${topSoils || 'none returned'}. NRCS soils are mapped interpretations, not borings. A geotechnical report and perc testing are still required.`,
+    }
+  }
   if (!data?.available || !data.value) {
     return missingMetric(
       'soils',
@@ -422,7 +472,28 @@ function soilsMetric(data?: OfficialSiteData['soils']): MetricResult {
 
 // ---------- Contamination metric (EPA FRS) ----------
 
-function contaminationMetric(data?: OfficialSiteData['contamination']): MetricResult {
+function contaminationMetric(data?: OfficialSiteData['contamination'], overlay?: ContaminationOverlay): MetricResult {
+  // Prefer parcel-wide overlay when available.
+  if (overlay?.available && overlay.value) {
+    const v = overlay.value
+    if (v.facilityCount === 0) {
+      return {
+        category: 'contamination', label: CATEGORY_LABELS.contamination, score: 88, weight: CATEGORY_WEIGHTS.contamination,
+        status: 'official', provenance: overlay.provenance,
+        displayValue: 'No EPA facilities on parcel',
+        summary: 'No EPA-regulated facilities were found within the parcel polygon (or its surrounding buffer).',
+        detail: `Parcel-wide EPA FRS overlay across ${v.samplePoints} grid points with a ${v.bufferMeters} m buffer around the parcel polygon. EPA FRS covers facilities in programs like RCRA, CERCLA, TRI, NPDES, and UST. National databases miss some local/historic conditions. A Phase I ESA is still required.`,
+      }
+    }
+    const score = v.hasMajorFlag ? 25 : v.facilityCount > 5 ? 50 : v.facilityCount > 1 ? 65 : 72
+    return {
+      category: 'contamination', label: CATEGORY_LABELS.contamination, score, weight: CATEGORY_WEIGHTS.contamination,
+      status: 'official', provenance: overlay.provenance,
+      displayValue: `${v.facilityCount} facilit${v.facilityCount === 1 ? 'y' : 'ies'} on parcel${v.hasMajorFlag ? ' · major flag' : ''}`,
+      summary: v.hasMajorFlag ? `${v.facilityCount} EPA-regulated facilit${v.facilityCount === 1 ? 'y' : 'ies'} within the parcel polygon (including a ${v.bufferMeters} m buffer), with major hazardous/toxic program flags.` : `${v.facilityCount} EPA-regulated facilit${v.facilityCount === 1 ? 'y' : 'ies'} within the parcel polygon (including a ${v.bufferMeters} m buffer). Nearest: ${v.nearestName}.`,
+      detail: `Parcel-wide EPA FRS overlay across ${v.samplePoints} grid points with a ${v.bufferMeters} m buffer around the parcel polygon. Facility types: ${v.facilityTypes.join(', ')}. EPA FRS covers RCRA, CERCLA, TRI, NPDES, UST, and other programs. National databases miss some local/historic conditions. A Phase I ESA is still required.`,
+    }
+  }
   if (!data?.available || !data.value) {
     return missingMetric(
       'contamination',
@@ -437,7 +508,7 @@ function contaminationMetric(data?: OfficialSiteData['contamination']): MetricRe
     return {
       category: 'contamination', label: CATEGORY_LABELS.contamination, score: 88, weight: CATEGORY_WEIGHTS.contamination,
       status: 'official', provenance: data.provenance,
-      displayValue: 'No EPA facilities within 1 km',
+      displayValue: 'No EPA facilities within 1 km (point)',
       summary: 'No EPA-regulated facilities were found within 1,000 meters of the selected point.',
       detail: 'EPA FRS covers facilities in programs like RCRA, CERCLA, TRI, NPDES, and UST. National databases miss some local/historic conditions. A Phase I ESA is still required.',
     }
@@ -446,7 +517,7 @@ function contaminationMetric(data?: OfficialSiteData['contamination']): MetricRe
   return {
     category: 'contamination', label: CATEGORY_LABELS.contamination, score, weight: CATEGORY_WEIGHTS.contamination,
     status: 'official', provenance: data.provenance,
-    displayValue: `${v.facilityCount} facilit${v.facilityCount === 1 ? 'y' : 'ies'} within 1 km${v.hasMajorFlag ? ' · major flag' : ''}`,
+    displayValue: `${v.facilityCount} facilit${v.facilityCount === 1 ? 'y' : 'ies'} within 1 km${v.hasMajorFlag ? ' · major flag' : ''} (point)`,
     summary: v.hasMajorFlag ? `${v.facilityCount} EPA-regulated facilit${v.facilityCount === 1 ? 'y' : 'ies'} within 1 km, including major hazardous/toxic program flags.` : `${v.facilityCount} EPA-regulated facilit${v.facilityCount === 1 ? 'y' : 'ies'} within 1 km. Nearest: ${v.nearestName}.`,
     detail: `Facility types: ${v.facilityTypes.join(', ')}. EPA FRS covers RCRA, CERCLA, TRI, NPDES, UST, and other programs. National databases miss some local/historic conditions. A Phase I ESA is still required.`,
   }
@@ -454,7 +525,27 @@ function contaminationMetric(data?: OfficialSiteData['contamination']): MetricRe
 
 // ---------- Species / Critical Habitat metric (USFWS ECOS) ----------
 
-function speciesMetric(data?: OfficialSiteData['species']): MetricResult {
+function speciesMetric(data?: OfficialSiteData['species'], overlay?: SpeciesOverlay): MetricResult {
+  // Prefer parcel-wide overlay when available.
+  if (overlay?.available && overlay.value) {
+    const v = overlay.value
+    if (!v.criticalHabitatHit) {
+      return {
+        category: 'species', label: CATEGORY_LABELS.species, score: 85, weight: CATEGORY_WEIGHTS.species,
+        status: 'official', provenance: overlay.provenance,
+        displayValue: 'No critical habitat on parcel',
+        summary: 'No USFWS critical habitat polygon intersects the parcel boundary.',
+        detail: `Parcel-wide USFWS ECOS overlay tested against ${v.samplePoints} parcel grid points. IPaC’s standard resource list is informational and not official consultation correspondence. A full IPaC project review and SHPO review are still recommended.`,
+      }
+    }
+    return {
+      category: 'species', label: CATEGORY_LABELS.species, score: 20, weight: CATEGORY_WEIGHTS.species,
+      status: 'official', provenance: overlay.provenance,
+      displayValue: `${v.speciesCount} critical habitat hit${v.speciesCount === 1 ? '' : 's'} · ${Math.round(v.habitatFraction * 100)}% of parcel`,
+      summary: `The parcel intersects critical habitat for ${v.criticalHabitatLayers.slice(0, 2).join(', ')}. ${Math.round(v.habitatFraction * 100)}% of the ${v.samplePoints} sampled grid points fall within mapped habitat.`,
+      detail: `Parcel-wide USFWS ECOS overlay tested against ${v.samplePoints} parcel grid points. Critical habitat layers: ${v.criticalHabitatLayers.join(', ')}. IPaC’s standard resource list is informational and not official consultation correspondence. A formal IPaC project review and agency consultation are required when a federal nexus exists.`,
+    }
+  }
   if (!data?.available || !data.value) {
     return missingMetric(
       'species',
@@ -469,7 +560,7 @@ function speciesMetric(data?: OfficialSiteData['species']): MetricResult {
     return {
       category: 'species', label: CATEGORY_LABELS.species, score: 85, weight: CATEGORY_WEIGHTS.species,
       status: 'official', provenance: data.provenance,
-      displayValue: 'No critical habitat at point',
+      displayValue: 'No critical habitat at point (point)',
       summary: 'No USFWS critical habitat polygon intersects the selected point.',
       detail: 'This is a point result and does not clear the entire parcel. IPaC’s standard resource list is informational and not official consultation correspondence. A full IPaC project review and SHPO review are still recommended.',
     }
@@ -477,7 +568,7 @@ function speciesMetric(data?: OfficialSiteData['species']): MetricResult {
   return {
     category: 'species', label: CATEGORY_LABELS.species, score: 20, weight: CATEGORY_WEIGHTS.species,
     status: 'official', provenance: data.provenance,
-    displayValue: `${v.speciesCount} critical habitat hit${v.speciesCount === 1 ? '' : 's'}`,
+    displayValue: `${v.speciesCount} critical habitat hit${v.speciesCount === 1 ? '' : 's'} (point)`,
     summary: `The selected point intersects critical habitat for ${v.criticalHabitatLayers.slice(0, 2).join(', ')}.`,
     detail: `Critical habitat layers: ${v.criticalHabitatLayers.join(', ')}. IPaC’s standard resource list is informational and not official consultation correspondence. A formal IPaC project review and agency consultation are required when a federal nexus exists.`,
   }
@@ -518,18 +609,41 @@ function evaluateHardGates(metrics: Record<ScoreCategory, MetricResult>, inputs:
     {
       id: 'contamination',
       label: 'No severe on-site contamination flag',
-      reason: official?.contamination?.available && official.contamination.value?.hasMajorFlag
-        ? `${official.contamination.value.facilityCount} EPA-regulated facilities with major hazardous/toxic flags within 1,000 meters. Nearest: ${official.contamination.value.nearestName}.`
-        : 'Environmental contamination screening did not return a severe flag. A Phase I ESA is still required before acquisition.',
-      triggered: Boolean(official?.contamination?.available && official.contamination.value?.hasMajorFlag),
+      reason: (() => {
+        const overlayFacilities = overlays?.contamination.available ? overlays.contamination.value : undefined
+        const pointFacilities = official?.contamination?.available ? official.contamination.value : undefined
+        if (overlayFacilities?.hasMajorFlag) {
+          return `${overlayFacilities.facilityCount} EPA-regulated facilit${overlayFacilities.facilityCount === 1 ? 'y' : 'ies'} with major hazardous/toxic flags on the parcel itself (including a ${overlayFacilities.bufferMeters} m buffer). Nearest: ${overlayFacilities.nearestName || 'unnamed'}.`
+        }
+        if (pointFacilities?.hasMajorFlag) {
+          return `${pointFacilities.facilityCount} EPA-regulated facilities with major hazardous/toxic flags within 1,000 meters. Nearest: ${pointFacilities.nearestName}.`
+        }
+        return 'Environmental contamination screening did not return a severe flag. A Phase I ESA is still required before acquisition.'
+      })(),
+      triggered: Boolean(
+        (overlays?.contamination.available && overlays.contamination.value?.hasMajorFlag)
+        || (official?.contamination?.available && official.contamination.value?.hasMajorFlag),
+      ),
     },
     {
       id: 'species-historic',
       label: 'No critical habitat / regulatory resource overlap',
-      reason: official?.species?.available && official.species.value?.criticalHabitatHit
-        ? `The selected point intersects critical habitat for ${official.species.value.criticalHabitatLayers.slice(0, 2).join(', ')}.`
-        : 'Species, critical habitat, and historic/cultural screening did not return a critical habitat hit. IPaC and SHPO review are still required when a federal or local nexus exists.',
-      triggered: Boolean(official?.species?.available && official.species.value?.criticalHabitatHit),
+      reason: (() => {
+        const overlayHit = overlays?.species.available ? overlays.species.value : undefined
+        const pointHit = official?.species?.available ? official.species.value : undefined
+        const layers = overlayHit?.criticalHabitatLayers || pointHit?.criticalHabitatLayers || []
+        if (overlayHit?.criticalHabitatHit) {
+          return `The parcel intersects critical habitat for ${layers.slice(0, 2).join(', ')} (${Math.round((overlayHit.habitatFraction || 0) * 100)}% of the parcel grid).`
+        }
+        if (pointHit?.criticalHabitatHit) {
+          return `The selected point intersects critical habitat for ${layers.slice(0, 2).join(', ')}.`
+        }
+        return 'Species, critical habitat, and historic/cultural screening did not return a critical habitat hit. IPaC and SHPO review are still required when a federal or local nexus exists.'
+      })(),
+      triggered: Boolean(
+        (overlays?.species.available && overlays.species.value?.criticalHabitatHit)
+        || (official?.species?.available && official.species.value?.criticalHabitatHit),
+      ),
     },
     {
       id: 'net-yield',
@@ -574,11 +688,11 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
     slope: slopeMetric(official?.slope, overlays?.slope),
     utilities: utilitiesMetric(inputs, official?.utilityService),
     access: accessMetric(official?.road, inputs),
-    soils: soilsMetric(official?.soils),
-    stormwater: stormwaterMetric(official?.stormwater),
-    easements: easementsMetric(official?.easements),
-    contamination: contaminationMetric(official?.contamination),
-    species: speciesMetric(official?.species),
+    soils: soilsMetric(official?.soils, overlays?.soils),
+    stormwater: stormwaterMetric(official?.stormwater, overlays?.stormwater),
+    easements: easementsMetric(official?.easements, overlays?.easements),
+    contamination: contaminationMetric(official?.contamination, overlays?.contamination),
+    species: speciesMetric(official?.species, overlays?.species),
     market: marketMetric(official?.demographics, official?.bps),
   }
 
@@ -656,6 +770,7 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
   if (Number(inputs.acres) > 0 && Number(inputs.acres) < 1 && inputs.intendedUse !== 'residential') redFlags.push('Reported acreage may be too small for the intended non-residential use.')
   if (metrics.market.status === 'official' && metrics.market.score !== null && metrics.market.score < 50) redFlags.push('ACS tract population change is weak.')
   if (metrics.soils.status === 'official' && metrics.soils.score !== null && metrics.soils.score < 40) redFlags.push('NRCS soils ratings are severe for septic/dwelling — geotechnical review and perc testing are critical.')
+  if (overlays?.soils.value && overlays.soils.value.severeFraction > 0.30) redFlags.push(`${Math.round(overlays.soils.value.severeFraction * 100)}% of the parcel has severe NRCS soil ratings — significant subtraction from net developable acreage.`)
   if (metrics.contamination.status === 'official' && metrics.contamination.score !== null && metrics.contamination.score < 40) redFlags.push('EPA-regulated facilities with major hazardous/toxic flags are within 1,000 meters.')
   if (metrics.species.status === 'official' && metrics.species.score !== null && metrics.species.score < 40) redFlags.push('The selected point intersects USFWS critical habitat — agency consultation is required.')
   if (hazards?.available) {
@@ -676,7 +791,7 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
   if (!inputs.zoningNotes.trim()) unknowns.push('Zoning and future land use have not been verified.')
   if (inputs.roadFrontage === 'unknown') unknowns.push('Legal road frontage has not been verified.')
   unknowns.push(hasOverlays
-    ? 'Parcel-wide overlays are loaded for FEMA, NWI, and slope. Soils, stormwater, easements, contamination, and species still describe no source — not the entire parcel.'
+    ? 'Parcel-wide overlays are loaded for FEMA, NWI, slope, soils, stormwater, easements, EPA contamination, and USFWS critical habitat. Net developable acreage subtracts floodway, wetlands, steep slope, hydric/severe soils, and mapped easements. Setbacks, buffers, contamination and critical habitat are gates (not land-use takeouts) and are not subtracted from net developable acreage.'
     : hasParcelBoundary
       ? 'A parcel boundary is loaded, but flood, wetland, slope, soils, and easement metrics still describe the selected point — not the entire parcel.'
       : 'This is a point screen; parcel boundaries, ownership, easements, and net buildable acreage are not loaded.')
@@ -707,11 +822,11 @@ function buildNextSteps(triggeredGates: HardGate[], hasParcelBoundary: boolean, 
   if (!hasOverlays) {
     steps.push(
       hasParcelBoundary
-        ? 'Run FEMA, NWI, slope, soils, setbacks, and easements as full parcel overlays to calculate net buildable acreage.'
-        : 'Load or obtain the assessor parcel boundary, then rerun FEMA, NWI, slope, and soils as parcel-wide overlays.',
+        ? 'Run FEMA, NWI, slope, soils, stormwater, easements, and setbacks as full parcel overlays to calculate net buildable acreage.'
+        : 'Load or obtain the assessor parcel boundary, then rerun FEMA, NWI, slope, soils, stormwater, and easements as parcel-wide overlays.',
     )
   } else {
-    steps.push('Add soils (NRCS SSURGO), stormwater, easements, and contamination overlays for a complete net-buildable-area calculation.')
+    steps.push('Add parcel-wide contamination, species, and jurisdiction-specific setback overlays for a complete net-buildable-area calculation.')
   }
   steps.push(
     'Confirm ownership, easements, legal access, and frontage from title and recorded plats (ALTA survey when required).',

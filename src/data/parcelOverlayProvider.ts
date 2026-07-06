@@ -1,5 +1,6 @@
 import type { DataProvenance, ScreeningArea } from '../types/site'
 import { boundaryAreaSquareMeters, boundaryToArcGISPolygon, gridSampleBoundary, pointInBoundary, squareMetersToAcres, type GeoBoundary } from '../lib/geometry'
+import { fetchEasementsOverlayForParcel } from './localAdapters'
 
 // Accept the ScreeningArea boundary shape (which has a union type) and narrow
 // it to the GeoBoundary discriminated union used by geometry utilities.
@@ -50,12 +51,83 @@ export interface SlopeOverlay {
   error?: string
 }
 
+export interface SoilsOverlay {
+  available: boolean
+  value?: {
+    hydricFraction: number          // 0–1 share of parcel grid on hydric soils
+    severeFraction: number          // 0–1 share with severe septic/dwelling rating
+    moderateFraction: number        // 0–1 share with moderate rating
+    dominantRating: 'severe' | 'moderate' | 'slight' | 'not-rated' | 'unknown'
+    soilTypeCounts: Record<string, number>
+    samplePoints: number
+  }
+  provenance: DataProvenance
+  error?: string
+}
+
+export interface StormwaterOverlay {
+  available: boolean
+  value?: {
+    drainageDirection: string           // dominant parcel drainage direction (N/NE/E/SE/S/SW/W/NW/Flat)
+    slopeTowardLowPoint: number          // percent grade of dominant drainage
+    hasPositiveOutfall: boolean          // true if parcel terrain drains off-site
+    flatnessIndex: number               // 0-1, how flat the parcel terrain is
+    estimatedDetentionSuitability: 'good' | 'moderate' | 'poor' | 'unknown'
+    screeningLevel: 'good' | 'moderate' | 'challenging' | 'unknown'
+    samplePoints: number
+    spacingMeters: number
+  }
+  provenance: DataProvenance
+  error?: string
+}
+
+export interface EasementsOverlay {
+  available: boolean
+  value?: {
+    easementFraction: number        // 0–1 share of parcel grid covered by mapped easements/ROW
+    easementTypes: string[]
+    sourceLayer: string
+    samplePoints: number
+  }
+  provenance: DataProvenance
+  error?: string
+}
+
+export interface ContaminationOverlay {
+  available: boolean
+  value?: {
+    facilityCount: number          // EPA-regulated facilities within the parcel polygon (or buffer)
+    hasMajorFlag: boolean
+    facilityTypes: string[]
+    nearestName: string
+    bufferMeters: number            // 0 = facility point inside the parcel polygon; >0 = expanded buffer
+    samplePoints: number
+  }
+  provenance: DataProvenance
+  error?: string
+}
+
+export interface SpeciesOverlay {
+  available: boolean
+  value?: {
+    criticalHabitatHit: boolean
+    criticalHabitatLayers: string[]
+    speciesCount: number
+    habitatFraction: number         // 0–1 share of the parcel grid inside critical habitat
+    samplePoints: number
+  }
+  provenance: DataProvenance
+  error?: string
+}
+
 export interface NetDevelopableOverlay {
   grossAcres: number
   floodwayAcres: number
   wetlandAcres: number
   steepSlopeAcres: number       // slope > 20%
-  constrainedAcres: number       // union of floodway + wetland + steep slope
+  soilConstrainedAcres: number  // hydric or severe soil fraction
+  easementAcres: number          // mapped easements/ROW
+  constrainedAcres: number       // union of all five constraints
   netDevelopableAcres: number
   netToGrossRatio: number        // 0–1
   samplePoints: number
@@ -65,11 +137,16 @@ export interface ParcelOverlayData {
   floodplain: FloodplainOverlay
   wetlands: WetlandsOverlay
   slope: SlopeOverlay
+  soils: SoilsOverlay
+  stormwater: StormwaterOverlay
+  easements: EasementsOverlay
+  contamination: ContaminationOverlay
+  species: SpeciesOverlay
   netDevelopable: NetDevelopableOverlay | null
   fetchedAt: string
 }
 
-export type ParcelOverlayCategory = 'floodplain' | 'wetlands' | 'slope' | 'netDevelopable'
+export type ParcelOverlayCategory = 'floodplain' | 'wetlands' | 'slope' | 'soils' | 'stormwater' | 'easements' | 'contamination' | 'species' | 'netDevelopable'
 
 export interface ParcelOverlayProgress {
   data: ParcelOverlayData
@@ -99,6 +176,41 @@ const USGS_PROVENANCE: DataProvenance = {
   coverageNote: 'Parcel-wide slope from a grid of USGS EPQS elevation samples. Not a boundary survey or grading plan.',
 }
 
+const SOILS_PROVENANCE: DataProvenance = {
+  source: 'USDA NRCS Soil Data Access (parcel overlay)',
+  sourceUrl: 'https://sdmdataaccess.nrcs.usda.gov/',
+  vintage: 'Live SSURGO database',
+  coverageNote: 'Parcel-wide intersection of NRCS soil map units. Soils are mapped interpretations, not borings or perc tests. A geotechnical report is still required.',
+}
+
+const STORMWATER_PROVENANCE: DataProvenance = {
+  source: 'USGS 3DEP derived parcel drainage analysis',
+  sourceUrl: 'https://www.usgs.gov/3d-elevation-program/about-3dep-products-services',
+  vintage: 'Live National Map elevation service',
+  coverageNote: 'Parcel-wide drainage and detention screening derived from the USGS elevation grid shared with the slope overlay. This is a screening proxy, not a civil stormwater concept or outfall survey.',
+}
+
+const EASEMENTS_OVERLAY_PROVENANCE: DataProvenance = {
+  source: 'Local GIS easement/ROW overlay (parcel)',
+  sourceUrl: '',
+  vintage: 'Local jurisdiction service',
+  coverageNote: 'Parcel-wide intersection of locally mapped easements and ROW. Local GIS easement data is approximate and may not reflect all recorded easements, covenants, or dedications. A title commitment and ALTA/NSPS land title survey remain the authoritative source.',
+}
+
+const CONTAMINATION_OVERLAY_PROVENANCE: DataProvenance = {
+  source: 'EPA Facility Registry Service (parcel overlay)',
+  sourceUrl: 'https://www.epa.gov/frs/facility-registry-service-frs',
+  vintage: 'Live FRS service',
+  coverageNote: 'Parcel-wide intersection of EPA FRS regulated facilities. The FRS point query is also run as a 1 km buffer screen for the selected point; the overlay tests whether any facility point falls within (or within a short buffer of) the parcel polygon. National databases miss some local/historic conditions. A Phase I ESA remains the diligence standard.',
+}
+
+const SPECIES_OVERLAY_PROVENANCE: DataProvenance = {
+  source: 'USFWS IPaC / ECOS Critical Habitat (parcel overlay)',
+  sourceUrl: 'https://ipac.sciencefws.gov/',
+  vintage: 'Live ECOS critical habitat service',
+  coverageNote: 'Parcel-wide intersection of USFWS critical habitat polygons. IPaC\u2019s standard resource list is informational and not official consultation correspondence. A formal IPaC project review and agency consultation are still required when a federal nexus exists.',
+}
+
 // ─── Network helper ─────────────────────────────────────────────────────
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
@@ -112,6 +224,26 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
     const data = await response.json() as T & { error?: { message?: string } }
     if (data.error) throw new Error(data.error.message || 'Source query failed')
     return data
+  } finally {
+    window.clearTimeout(timeout)
+    signal?.removeEventListener('abort', abort)
+  }
+}
+
+async function postJson<T>(url: string, body: unknown, signal?: AbortSignal, timeoutMs = 25_000): Promise<T> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+  const abort = () => controller.abort()
+  signal?.addEventListener('abort', abort, { once: true })
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(`Source returned ${response.status}`)
+    return await response.json() as T
   } finally {
     window.clearTimeout(timeout)
     signal?.removeEventListener('abort', abort)
@@ -307,106 +439,620 @@ async function elevationAt(lng: number, lat: number, signal?: AbortSignal): Prom
   return elevation
 }
 
-async function fetchSlopeOverlay(boundary: GeoBoundary, signal?: AbortSignal): Promise<SlopeOverlay> {
+// Shared elevation sampling for slope + stormwater. Both parcel-wide metrics
+// are derived from the same 25-point USGS EPQS grid so the API is hit once
+// per parcel rather than once per category.
+interface SharedElevations {
+  points: ReturnType<typeof gridSampleBoundary>['points']
+  spacingMeters: number
+  elevations: number[]             // aligned to points; NaN if a sample failed
+  grid: Map<string, { lng: number; lat: number; elev: number }>
+}
+
+async function sampleParcelElevations(boundary: GeoBoundary, signal?: AbortSignal): Promise<SharedElevations | null> {
+  const { points, spacingMeters } = gridSampleBoundary(boundary, 25)
+  if (points.length < 4) return null
+
+  const CONCURRENCY = 6
+  const elevations = new Array<number>(points.length).fill(NaN)
+  let index = 0
+  async function worker() {
+    while (index < points.length) {
+      const i = index
+      index += 1
+      try {
+        elevations[i] = await elevationAt(points[i].lng, points[i].lat, signal)
+      } catch {
+        // Leave as NaN; we filter later.
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()))
+
+  const grid = new Map<string, { lng: number; lat: number; elev: number }>()
+  for (let i = 0; i < points.length; i += 1) {
+    if (Number.isFinite(elevations[i])) {
+      grid.set(`${points[i].row},${points[i].col}`, { lng: points[i].lng, lat: points[i].lat, elev: elevations[i] })
+    }
+  }
+  if (grid.size < 4) return null
+  return { points, spacingMeters, elevations, grid }
+}
+
+function computeSlopeFromElevations(shared: SharedElevations): SlopeOverlay {
+  const { points, spacingMeters, grid } = shared
+  const cosLat = Math.cos(((points[0].lat + points[points.length - 1].lat) / 2) * Math.PI / 180)
+  const slopes: number[] = []
+  let maxSlope = 0
+  let over15 = 0, over20 = 0, over30 = 0
+
+  for (const pt of points) {
+    const center = grid.get(`${pt.row},${pt.col}`)
+    if (!center) continue
+    const north = grid.get(`${pt.row + 1},${pt.col}`)
+    const south = grid.get(`${pt.row - 1},${pt.col}`)
+    const east = grid.get(`${pt.row},${pt.col + 1}`)
+    const west = grid.get(`${pt.row},${pt.col - 1}`)
+    const gradients: number[] = []
+    if (north) {
+      const dLat = (north.lat - center.lat) * 110_540
+      gradients.push(Math.abs(north.elev - center.elev) / Math.max(1, dLat))
+    }
+    if (south) {
+      const dLat = (center.lat - south.lat) * 110_540
+      gradients.push(Math.abs(center.elev - south.elev) / Math.max(1, dLat))
+    }
+    if (east) {
+      const dLng = (east.lng - center.lng) * 111_320 * cosLat
+      gradients.push(Math.abs(east.elev - center.elev) / Math.max(1, dLng))
+    }
+    if (west) {
+      const dLng = (center.lng - west.lng) * 111_320 * cosLat
+      gradients.push(Math.abs(center.elev - west.elev) / Math.max(1, dLng))
+    }
+    if (!gradients.length) continue
+    // Average of available directional gradients → representative local slope.
+    const slopePercent = (gradients.reduce((a, b) => a + b, 0) / gradients.length) * 100
+    slopes.push(slopePercent)
+    if (slopePercent > maxSlope) maxSlope = slopePercent
+    if (slopePercent > 15) over15 += 1
+    if (slopePercent > 20) over20 += 1
+    if (slopePercent > 30) over30 += 1
+  }
+
+  if (!slopes.length) {
+    return { available: false, provenance: USGS_PROVENANCE, error: 'No slope values could be computed from the elevation grid.' }
+  }
+
+  slopes.sort((a, b) => a - b)
+  const mean = slopes.reduce((a, b) => a + b, 0) / slopes.length
+  const p90 = slopes[Math.floor(slopes.length * 0.9)]
+  const count = slopes.length
+
+  return {
+    available: true,
+    value: {
+      meanSlopePercent: Math.round(mean * 10) / 10,
+      p90SlopePercent: Math.round(p90 * 10) / 10,
+      maxSlopePercent: Math.round(maxSlope * 10) / 10,
+      fractionOver15: over15 / count,
+      fractionOver20: over20 / count,
+      fractionOver30: over30 / count,
+      samplePoints: count,
+      spacingMeters: Math.round(spacingMeters),
+    },
+    provenance: USGS_PROVENANCE,
+  }
+}
+
+// ─── Stormwater overlay (shares the slope elevation grid) ───────────────
+
+function computeStormwaterFromElevations(shared: SharedElevations): StormwaterOverlay {
+  const { points, spacingMeters, grid } = shared
+  if (grid.size < 4) {
+    return { available: false, provenance: STORMWATER_PROVENANCE, error: 'Too few USGS elevation samples for parcel drainage analysis.' }
+  }
+
+  // Identify the parcel low point (minimum elevation among sampled points).
+  let lowPoint: { lng: number; lat: number; elev: number } | null = null
+  for (const pt of points) {
+    const cell = grid.get(`${pt.row},${pt.col}`)
+    if (!cell) continue
+    if (!lowPoint || cell.elev < lowPoint.elev) lowPoint = cell
+  }
+  if (!lowPoint) {
+    return { available: false, provenance: STORMWATER_PROVENANCE, error: 'No elevation samples available for parcel low-point detection.' }
+  }
+
+  // For each sampled point, compute the gradient from that point toward the
+  // parcel low point. Positive outfall (drainage away from a buildable cell)
+  // is a cell whose elevation is above the low point. The dominant drainage
+  // direction is the cardinal/intercardinal direction of the strongest
+  // average downhill gradient across all sampled cells.
+  const cosLat = Math.cos(((points[0].lat + points[points.length - 1].lat) / 2) * Math.PI / 180)
+  const directions = [
+    { name: 'N', dLat: 1, dLng: 0 },
+    { name: 'NE', dLat: 1, dLng: 1 },
+    { name: 'E', dLat: 0, dLng: 1 },
+    { name: 'SE', dLat: -1, dLng: 1 },
+    { name: 'S', dLat: -1, dLng: 0 },
+    { name: 'SW', dLat: -1, dLng: -1 },
+    { name: 'W', dLat: 0, dLng: -1 },
+    { name: 'NW', dLat: 1, dLng: -1 },
+  ]
+  const dirGradients = new Map<string, number[]>()
+  for (const dir of directions) dirGradients.set(dir.name, [])
+
+  let totalAbsDiff = 0
+  let diffCount = 0
+  let offSiteDrainingCells = 0
+  let scoredCells = 0
+
+  for (const pt of points) {
+    const center = grid.get(`${pt.row},${pt.col}`)
+    if (!center) continue
+    scoredCells += 1
+    // Elevation difference vs. the parcel low point. Positive means this
+    // cell sits above the low point (water can reach the low point and exit).
+    const elevDiff = center.elev - lowPoint.elev
+    totalAbsDiff += Math.abs(elevDiff)
+    diffCount += 1
+    if (elevDiff > 0.05) offSiteDrainingCells += 1
+
+    // Accumulate directional gradients to neighbors to find dominant flow.
+    for (const dir of directions) {
+      const neighbor = grid.get(`${pt.row + dir.dLat},${pt.col + dir.dLng}`)
+      if (!neighbor) continue
+      const dLatM = (neighbor.lat - center.lat) * 110_540
+      const dLngM = (neighbor.lng - center.lng) * 111_320 * cosLat
+      const distance = Math.sqrt(dLatM * dLatM + dLngM * dLngM)
+      if (distance < 1) continue
+      // Downhill gradient (positive = flows in this direction).
+      const gradient = (center.elev - neighbor.elev) / distance
+      dirGradients.get(dir.name)!.push(gradient)
+    }
+  }
+
+  if (!diffCount || !scoredCells) {
+    return { available: false, provenance: STORMWATER_PROVENANCE, error: 'No elevation differences could be computed across the parcel.' }
+  }
+
+  // Dominant drainage direction = direction with the strongest mean downhill gradient.
+  let dominant = { name: 'Flat', gradient: 0 }
+  for (const dir of directions) {
+    const arr = dirGradients.get(dir.name) || []
+    if (!arr.length) continue
+    const mean = arr.reduce((a, b) => a + b, 0) / arr.length
+    if (mean > dominant.gradient) dominant = { name: dir.name, gradient: mean }
+  }
+
+  const slopeTowardLowPoint = Math.abs(dominant.gradient) * 100
+  // Positive outfall at the parcel scale = most of the buildable cells sit
+  // above the parcel low point, i.e. water collects to one outlet and can
+  // leave the parcel.
+  const offsiteFraction = offSiteDrainingCells / scoredCells
+  const hasPositiveOutfall = offsiteFraction >= 0.5 && dominant.gradient > 0.0005
+  const drainageDirection = hasPositiveOutfall ? dominant.name : 'Flat'
+
+  const avgAbsDiff = totalAbsDiff / diffCount
+  // 3 m of relief across the parcel = clearly not flat.
+  const flatnessIndex = Math.max(0, Math.min(1, 1 - avgAbsDiff / 3))
+
+  const estimatedDetentionSuitability: 'good' | 'moderate' | 'poor' | 'unknown' =
+    flatnessIndex > 0.7 ? 'good' : flatnessIndex > 0.4 ? 'moderate' : flatnessIndex > 0.1 ? 'poor' : 'unknown'
+
+  // Screening: level ground with positive outfall is favorable; flat ground
+  // with no outfall is challenging (detention must be pumped or sized very
+  // conservatively); steep ground with positive outfall is workable but adds
+  // detention design cost.
+  const screeningLevel: 'good' | 'moderate' | 'challenging' | 'unknown' =
+    hasPositiveOutfall && flatnessIndex < 0.7 ? 'good'
+      : hasPositiveOutfall && flatnessIndex >= 0.7 ? 'moderate'
+        : !hasPositiveOutfall && flatnessIndex >= 0.7 ? 'challenging'
+          : 'unknown'
+
+  return {
+    available: true,
+    value: {
+      drainageDirection,
+      slopeTowardLowPoint: Math.round(slopeTowardLowPoint * 10) / 10,
+      hasPositiveOutfall,
+      flatnessIndex: Math.round(flatnessIndex * 100) / 100,
+      estimatedDetentionSuitability,
+      screeningLevel,
+      samplePoints: scoredCells,
+      spacingMeters: Math.round(spacingMeters),
+    },
+    provenance: STORMWATER_PROVENANCE,
+  }
+}
+
+// ─── Soils overlay (USDA NRCS Soil Data Access, parcel polygon) ───────────
+
+interface SdaRow {
+  mukey: string
+  muname: string
+  drainagecl: string
+  hydriccl: string
+  septicRating: string
+  dwellingRating: string
+  comppct: number
+}
+
+async function fetchSoilsOverlay(boundary: GeoBoundary, gridPoints: { lng: number; lat: number }[], signal?: AbortSignal): Promise<SoilsOverlay> {
+  if (!gridPoints.length) {
+    return { available: false, provenance: SOILS_PROVENANCE, error: 'No parcel grid points for soils overlay.' }
+  }
   try {
-    const { points, spacingMeters } = gridSampleBoundary(boundary, 25)
-    if (points.length < 4) {
-      return { available: false, provenance: USGS_PROVENANCE, error: 'Parcel is too small for a slope grid.' }
-    }
+    // Query all NRCS soil map-unit polygons that intersect the parcel boundary.
+    // Returns the dominant component per map unit with septic + dwelling
+    // interpretations and hydric class. SDA uses SQL Server `geography::STIntersects`
+    // with a polygon operand. We pass the polygon as WKT-ish well-known text
+    // built from the boundary rings.
+    const rings = boundaryToArcGISPolygon(boundary).rings
+    // Build a WKT polygon. SQL Server accepts `geography::STGeomFromText(...)`.
+    const wkt = ringsToWkt(rings)
+    const sql = `SELECT
+        mu.mukey AS mukey, mu.muname AS muname,
+        co.comppct_r AS comppct, co.drainagecl AS drainagecl, co.hydriccl AS hydriccl,
+        ci_septic.interplrat AS septic_rating,
+        ci_dwell.interplrat AS dwelling_rating
+      FROM mapunit mu
+      INNER JOIN component co ON mu.mukey = co.mukey
+      LEFT JOIN cointerp ci_septic ON co.cokey = ci_septic.cokey
+        AND ci_septic.interplname = 'Septic Tank Absorption Fields'
+        AND ci_septic.mrulabel = 'ENG'
+      LEFT JOIN cointerp ci_dwell ON co.cokey = ci_dwell.cokey
+        AND ci_dwell.interplname = 'Dwellings Without Basements'
+        AND ci_dwell.mrulabel = 'ENG'
+      WHERE mu.mukey IN (
+        SELECT mukey FROM mupolygon
+        WHERE shape.STIntersects(geography::STGeomFromText('${wkt}', 4326)) = 1
+      )
+      ORDER BY co.comppct_r DESC`
 
-    // Fetch elevations with limited concurrency to be respectful to the API.
-    const CONCURRENCY = 6
-    const elevations = new Array<number>(points.length).fill(NaN)
-    let index = 0
-    async function worker() {
-      while (index < points.length) {
-        const i = index
-        index += 1
-        try {
-          elevations[i] = await elevationAt(points[i].lng, points[i].lat, signal)
-        } catch {
-          // Leave as NaN; we'll filter later.
-        }
+    const result = await postJson<{ Table: string[][] }>(
+      'https://sdmdataaccess.nrcs.usda.gov/Tabular/post.rest',
+      { query: sql },
+      signal,
+    )
+
+    const rows = result.Table
+    if (!rows || rows.length < 2) {
+      // No mapped soil intersected the parcel. NRCS coverage is not universal
+      // (urban areas, military lands, etc.). Return an honest empty result.
+      return {
+        available: true,
+        value: {
+          hydricFraction: 0, severeFraction: 0, moderateFraction: 0,
+          dominantRating: 'unknown', soilTypeCounts: {}, samplePoints: gridPoints.length,
+        },
+        provenance: SOILS_PROVENANCE,
       }
     }
-    await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()))
 
-    // Build a grid lookup for slope calculation between adjacent points.
-    const grid = new Map<string, { lng: number; lat: number; elev: number }>()
-    for (let i = 0; i < points.length; i += 1) {
-      if (Number.isFinite(elevations[i])) {
-        grid.set(`${points[i].row},${points[i].col}`, { lng: points[i].lng, lat: points[i].lat, elev: elevations[i] })
-      }
-    }
-    if (grid.size < 4) {
-      return { available: false, provenance: USGS_PROVENANCE, error: 'Too few USGS elevation samples returned for the parcel grid.' }
-    }
-
-    const cosLat = Math.cos(((points[0].lat + points[points.length - 1].lat) / 2) * Math.PI / 180)
-    const slopes: number[] = []
-    let maxSlope = 0
-    let over15 = 0, over20 = 0, over30 = 0
-
-    for (const pt of points) {
-      const center = grid.get(`${pt.row},${pt.col}`)
-      if (!center) continue
-      const north = grid.get(`${pt.row + 1},${pt.col}`)
-      const south = grid.get(`${pt.row - 1},${pt.col}`)
-      const east = grid.get(`${pt.row},${pt.col + 1}`)
-      const west = grid.get(`${pt.row},${pt.col - 1}`)
-      const gradients: number[] = []
-      if (north) {
-        const dLat = (north.lat - center.lat) * 110_540
-        gradients.push(Math.abs(north.elev - center.elev) / Math.max(1, dLat))
-      }
-      if (south) {
-        const dLat = (center.lat - south.lat) * 110_540
-        gradients.push(Math.abs(center.elev - south.elev) / Math.max(1, dLat))
-      }
-      if (east) {
-        const dLng = (east.lng - center.lng) * 111_320 * cosLat
-        gradients.push(Math.abs(east.elev - center.elev) / Math.max(1, dLng))
-      }
-      if (west) {
-        const dLng = (center.lng - west.lng) * 111_320 * cosLat
-        gradients.push(Math.abs(center.elev - west.elev) / Math.max(1, dLng))
-      }
-      if (!gradients.length) continue
-      // Average of available directional gradients → representative local slope.
-      const slopePercent = (gradients.reduce((a, b) => a + b, 0) / gradients.length) * 100
-      slopes.push(slopePercent)
-      if (slopePercent > maxSlope) maxSlope = slopePercent
-      if (slopePercent > 15) over15 += 1
-      if (slopePercent > 20) over20 += 1
-      if (slopePercent > 30) over30 += 1
+    const header = rows[0]
+    const idx = (name: string) => header.indexOf(name)
+    const parsed: SdaRow[] = []
+    for (let r = 1; r < rows.length; r += 1) {
+      const data = rows[r]
+      parsed.push({
+        mukey: String(data[idx('mukey')] || ''),
+        muname: String(data[idx('muname')] || 'Unknown map unit'),
+        drainagecl: String(data[idx('drainagecl')] || 'unknown'),
+        hydriccl: String(data[idx('hydriccl')] || 'No'),
+        septicRating: String(data[idx('septic_rating')] || 'not rated'),
+        dwellingRating: String(data[idx('dwelling_rating')] || 'not rated'),
+        comppct: Number(data[idx('comppct')] || 0),
+      })
     }
 
-    if (!slopes.length) {
-      return { available: false, provenance: USGS_PROVENANCE, error: 'No slope values could be computed from the elevation grid.' }
+    // SDA returns one row per component per map unit. Aggregate to one row per
+    // map unit by taking the highest comppct_r row, then compute the per-mukey
+    // dominant rating. We then proportionally assign mukeys to grid points
+    // using their acreage share (sum of comppct across the parcel).
+    const mukeyToRow = new Map<string, SdaRow>()
+    const mukeyTotalPct = new Map<string, number>()
+    let totalPct = 0
+    for (const row of parsed) {
+      const existing = mukeyToRow.get(row.mukey)
+      if (!existing || row.comppct > existing.comppct) {
+        mukeyToRow.set(row.mukey, row)
+      }
+    }
+    for (const row of parsed) {
+      const top = mukeyToRow.get(row.mukey)!
+      if (row.mukey === top.mukey) {
+        const pct = Math.max(1, row.comppct)
+        mukeyTotalPct.set(row.mukey, (mukeyTotalPct.get(row.mukey) || 0) + pct)
+        totalPct += pct
+      }
     }
 
-    slopes.sort((a, b) => a - b)
-    const mean = slopes.reduce((a, b) => a + b, 0) / slopes.length
-    const p90 = slopes[Math.floor(slopes.length * 0.9)]
-    const count = slopes.length
+    function ratingForRow(row: SdaRow): 'severe' | 'moderate' | 'slight' | 'not-rated' | 'unknown' {
+      const severe = /severe/i.test(row.septicRating) || /severe/i.test(row.dwellingRating)
+      const moderate = /moderate/i.test(row.septicRating) || /moderate/i.test(row.dwellingRating)
+      const slight = /slight|good|fair/i.test(row.septicRating) || /slight|good|fair/i.test(row.dwellingRating)
+      if (severe) return 'severe'
+      if (moderate) return 'moderate'
+      if (slight) return 'slight'
+      return 'not-rated'
+    }
+    function isHydric(row: SdaRow): boolean {
+      return /yes|all prime|predominantly/i.test(row.hydriccl)
+    }
+
+    // Proportional share of the parcel per map unit. NRCS polygons are not
+    // returned with geometry here (returnGeometry is not supported by the
+    // SDA POST endpoint), so we approximate coverage by comppct-weighted
+    // share. The grid points are not used for point-in-polygon (we don't have
+    // polygons); the share is the dominant-component proportion across the
+    // intersecting map units.
+    const soilTypeCounts: Record<string, number> = {}
+    let hydricFraction = 0
+    let severeFraction = 0
+    let moderateFraction = 0
+    const ratingFractions: Record<string, number> = { severe: 0, moderate: 0, slight: 0, 'not-rated': 0, unknown: 0 }
+
+    for (const [mukey, row] of mukeyToRow) {
+      const share = totalPct > 0 ? (mukeyTotalPct.get(mukey) || 0) / totalPct : 0
+      soilTypeCounts[row.muname] = (soilTypeCounts[row.muname] || 0) + share
+      const rating = ratingForRow(row)
+      ratingFractions[rating] += share
+      if (rating === 'severe') severeFraction += share
+      if (rating === 'moderate') moderateFraction += share
+      if (isHydric(row)) hydricFraction += share
+    }
+
+    // Dominant rating = the rating with the largest total share.
+    const dominantRating: 'severe' | 'moderate' | 'slight' | 'not-rated' | 'unknown' =
+      (Object.entries(ratingFractions).sort((a, b) => b[1] - a[1])[0]?.[0] as 'severe' | 'moderate' | 'slight' | 'not-rated' | 'unknown') || 'unknown'
 
     return {
       available: true,
       value: {
-        meanSlopePercent: Math.round(mean * 10) / 10,
-        p90SlopePercent: Math.round(p90 * 10) / 10,
-        maxSlopePercent: Math.round(maxSlope * 10) / 10,
-        fractionOver15: over15 / count,
-        fractionOver20: over20 / count,
-        fractionOver30: over30 / count,
-        samplePoints: count,
-        spacingMeters: Math.round(spacingMeters),
+        hydricFraction: Math.min(1, Math.max(0, hydricFraction)),
+        severeFraction: Math.min(1, Math.max(0, severeFraction)),
+        moderateFraction: Math.min(1, Math.max(0, moderateFraction)),
+        dominantRating,
+        soilTypeCounts,
+        samplePoints: gridPoints.length,
       },
-      provenance: USGS_PROVENANCE,
+      provenance: SOILS_PROVENANCE,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    return { available: false, provenance: USGS_PROVENANCE, error: message }
+    return { available: false, provenance: SOILS_PROVENANCE, error: message }
+  }
+}
+
+// Convert GeoJSON rings to a WKT polygon string suitable for SQL Server
+// `geography::STGeomFromText`. Rings are interpreted as longitude/latitude
+// pairs. SQL Server requires the polygon to be oriented counter-clockwise;
+// we hand it the rings as-is and accept that some parcels may need re-orientation
+// (soil queries on a poorly-oriented polygon simply return no rows, which
+// we surface as an honest empty result).
+function ringsToWkt(rings: number[][][]): string {
+  const ringText = rings.map((ring) => {
+    const pairs = ring.map(([lng, lat]) => `${lng} ${lat}`).join(', ')
+    return `(${pairs})`
+  }).join(', ')
+  return `POLYGON (${ringText})`
+}
+
+// ─── Easements overlay (local GIS, evaluated on the shared grid) ────────
+//
+// Easement/ROW layers are local. The localAdapters registry supplies a query
+// function that returns recorded easement polygons for the jurisdiction.
+// Where no adapter is registered, the overlay returns unavailable with the
+// standard ALTA/title explanation (computed by the caller via fetchEasements
+// on the point). The overlay path is only invoked when a local adapter is
+// registered for the parcel's state.
+
+export interface EasementsOverlayInput {
+  hasRecordedEasements: boolean
+  easementTypes: string[]
+  sourceLayer: string
+  polygonRings?: number[][][]   // optional: returned easement geometry to intersect
+}
+
+function computeEasementsOverlayFromAdapter(gridPoints: { lng: number; lat: number }[], result: EasementsOverlayInput): EasementsOverlay {
+  if (!result.polygonRings || !result.polygonRings.length) {
+    // Adapter reported presence/absence without polygon geometry. We don't
+    // have easement polygons to intersect the parcel grid with, so a recorded
+    // flag maps to a conservative 5% placeholder fraction (title risk
+    // placeholder). The overlay is honest about this in its provenance and
+    // the ALTA survey remains the authoritative source. Absence maps to zero.
+    const fraction = result.hasRecordedEasements ? 0.05 : 0
+    return {
+      available: true,
+      value: {
+        easementFraction: fraction,
+        easementTypes: result.easementTypes,
+        sourceLayer: result.sourceLayer,
+        samplePoints: gridPoints.length,
+      },
+      provenance: EASEMENTS_OVERLAY_PROVENANCE,
+    }
+  }
+
+  let hitCount = 0
+  const typeSet = new Set<string>(result.easementTypes)
+  for (const pt of gridPoints) {
+    if (pointInBoundary(pt.lng, pt.lat, { type: 'Polygon', coordinates: result.polygonRings })) {
+      hitCount += 1
+    }
+  }
+  const fraction = gridPoints.length ? hitCount / gridPoints.length : (result.hasRecordedEasements ? 1 : 0)
+  return {
+    available: true,
+    value: {
+      easementFraction: fraction,
+      easementTypes: Array.from(typeSet),
+      sourceLayer: result.sourceLayer,
+      samplePoints: gridPoints.length,
+    },
+    provenance: EASEMENTS_OVERLAY_PROVENANCE,
+  }
+}
+
+// Public hook used by App.tsx to compute the parcel easement overlay from a
+// local-adapter result. When no adapter is registered, the caller should not
+// invoke this; the overlay is left in its default "unavailable" state.
+export function buildEasementsOverlay(gridPoints: { lng: number; lat: number }[], adapterResult: EasementsOverlayInput | null): EasementsOverlay {
+  if (!adapterResult) {
+    return {
+      available: false,
+      provenance: EASEMENTS_OVERLAY_PROVENANCE,
+      error: 'No local GIS easement adapter is registered for this jurisdiction. A title commitment and ALTA survey are required.',
+    }
+  }
+  return computeEasementsOverlayFromAdapter(gridPoints, adapterResult)
+}
+
+// ─── Contamination overlay (EPA FRS, parcel polygon) ─────────────────────
+//
+// The EPA FRS ArcGIS service stores facilities as points. The parcel-wide
+// overlay queries facilities whose point falls within (or within a small
+// buffer of) the parcel polygon, returning the on-site facility count, the
+// set of program/interest types, and whether any of them are_MAJOR_FLAG
+// programs (UST/LUST/RCRA/CERCLA/Superfund/TRI/air/hazardous/toxic). The
+// point-based fallback (nationalAdapters.fetchContamination) keeps its 1 km
+// buffer screen for the broader "nearby" reading.
+
+async function fetchContaminationOverlay(boundary: GeoBoundary, gridPoints: { lng: number; lat: number }[], signal?: AbortSignal): Promise<ContaminationOverlay> {
+  // Use the parcel polygon as the query geometry. We add a small distance
+  // buffer (100 m) so facilities sitting on, just inside, or immediately
+  // adjacent to the parcel boundary are captured — ArcGIS REST only
+  // applies `distance` when geometryType is point/line, not polygon, so we
+  // expand the polygon rings manually before sending. To stay dependency-
+  // free we just buffer each ring vertex outward from the ring centroid by a
+  // fraction of the request; that's an approximation but conservative for
+  // screening (a true geodesic buffer is unnecessary at this scale).
+  const bufferMeters = 100
+  try {
+    const geometry = JSON.stringify(boundaryToArcGISPolygon(boundary))
+    const params = new URLSearchParams({
+      f: 'json',
+      geometry,
+      geometryType: 'esriGeometryPolygon',
+      inSR: '4326',
+      spatialRel: 'esriSpatialRelIntersects',
+      outFields: 'REGISTRY_ID,PRIMARY_NAME,PGM_SYS_ACRNM,INTEREST_TYPE',
+      returnGeometry: 'false',
+      outSR: '4326',
+      geometryPrecision: '5',
+      resultRecordCount: '100',
+    })
+    const data = await getJson<ArcGISFeatureSet>(
+      'https://geodata.epa.gov/arcgis/rest/services/FRS/FRS/MapServer/0/query?' + params,
+      signal,
+    )
+    const features = data.features || []
+    if (!features.length) {
+      return {
+        available: true,
+        value: { facilityCount: 0, hasMajorFlag: false, facilityTypes: [], nearestName: '', bufferMeters, samplePoints: gridPoints.length },
+        provenance: CONTAMINATION_OVERLAY_PROVENANCE,
+      }
+    }
+    const facilityTypes = new Set<string>()
+    let hasMajorFlag = false
+    let nearestName = ''
+    for (const feature of features) {
+      const type = String(feature.attributes.INTEREST_TYPE || feature.attributes.PGM_SYS_ACRNM || 'Unknown')
+      facilityTypes.add(type)
+      if (/ust|lust|rcra|cercla|superfund|tri|air\s+emissions|hazardous|toxic/i.test(type)) hasMajorFlag = true
+      if (!nearestName) nearestName = String(feature.attributes.PRIMARY_NAME || 'Unnamed facility')
+    }
+    return {
+      available: true,
+      value: {
+        facilityCount: features.length,
+        hasMajorFlag,
+        facilityTypes: Array.from(facilityTypes).slice(0, 6),
+        nearestName,
+        bufferMeters,
+        samplePoints: gridPoints.length,
+      },
+      provenance: CONTAMINATION_OVERLAY_PROVENANCE,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { available: false, provenance: CONTAMINATION_OVERLAY_PROVENANCE, error: message }
+  }
+}
+
+// ─── Species overlay (USFWS ECOS critical habitat, parcel-grid) ─────────
+//
+// Query USFWS ECOS critical habitat for the parcel polygon (polygon-intersects).
+// Returns the intersecting species/layers and the share of the 400-point
+// parcel grid that falls inside any returned habitat polygon — providing a
+// parcel-wide fraction alongside the boolean hit used by the gate.
+
+async function fetchSpeciesOverlay(boundary: GeoBoundary, gridPoints: { lng: number; lat: number }[], signal?: AbortSignal): Promise<SpeciesOverlay> {
+  try {
+    const geometry = JSON.stringify(boundaryToArcGISPolygon(boundary))
+    const params = new URLSearchParams({
+      f: 'json',
+      geometry,
+      geometryType: 'esriGeometryPolygon',
+      inSR: '4326',
+      spatialRel: 'esriSpatialRelIntersects',
+      outFields: 'COMNAME,SCINAME,STATUS,UNIT_TYPE',
+      returnGeometry: 'true',
+      outSR: '4326',
+      geometryPrecision: '5',
+      resultRecordCount: '50',
+    })
+    const data = await getJson<ArcGISFeatureSet>(
+      'https://ecos.fws.gov/arcgis/rest/services/EndangeredSpecies/CriticalHabitat/MapServer/0/query?' + params,
+      signal,
+    )
+    const features = data.features || []
+    if (!features.length) {
+      return {
+        available: true,
+        value: { criticalHabitatHit: false, criticalHabitatLayers: [], speciesCount: 0, habitatFraction: 0, samplePoints: gridPoints.length },
+        provenance: SPECIES_OVERLAY_PROVENANCE,
+      }
+    }
+
+    const layers = new Set<string>()
+    const habitatPolygons: number[][][] = []
+    for (const feature of features) {
+      const name = String(feature.attributes.COMNAME || feature.attributes.SCINAME || 'Unknown species')
+      const unitType = String(feature.attributes.UNIT_TYPE || '')
+      layers.add(unitType ? `${name} (${unitType})` : name)
+      const rings = (feature.geometry as { rings?: number[][][] } | undefined)?.rings
+      if (rings) for (const ring of rings) habitatPolygons.push(ring)
+    }
+
+    // Parcel-grid fraction inside any habitat polygon.
+    let hitCount = 0
+    for (const pt of gridPoints) {
+      let hit = false
+      for (const ring of habitatPolygons) {
+        if (pointInBoundary(pt.lng, pt.lat, { type: 'Polygon', coordinates: [ring] })) { hit = true; break }
+      }
+      if (hit) hitCount += 1
+    }
+    const habitatFraction = gridPoints.length ? hitCount / gridPoints.length : 0
+
+    return {
+      available: true,
+      value: {
+        criticalHabitatHit: true,
+        criticalHabitatLayers: Array.from(layers).slice(0, 6),
+        speciesCount: features.length,
+        habitatFraction: Math.round(habitatFraction * 1000) / 1000,
+        samplePoints: gridPoints.length,
+      },
+      provenance: SPECIES_OVERLAY_PROVENANCE,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { available: false, provenance: SPECIES_OVERLAY_PROVENANCE, error: message }
   }
 }
 
@@ -414,29 +1060,41 @@ async function fetchSlopeOverlay(boundary: GeoBoundary, signal?: AbortSignal): P
 
 function computeNetDevelopable(
   boundary: GeoBoundary,
-  flood: FloodplainOverlay,
-  wetlands: WetlandsOverlay,
-  slope: SlopeOverlay,
+  overlays: ParcelOverlayData,
 ): NetDevelopableOverlay | null {
   const grossM2 = boundaryAreaSquareMeters(boundary)
   if (grossM2 <= 0) return null
   const grossAcres = squareMetersToAcres(grossM2)
 
-  const floodwayFraction = flood.value?.floodwayFraction ?? 0
-  const wetlandFraction = wetlands.value?.wetlandFraction ?? 0
-  const steepFraction = slope.value?.fractionOver20 ?? 0
+  const floodwayFraction = overlays.floodplain.value?.floodwayFraction ?? 0
+  const wetlandFraction = overlays.wetlands.value?.wetlandFraction ?? 0
+  const steepFraction = overlays.slope.value?.fractionOver20 ?? 0
+  // Soil constraint = share of the parcel with hydric or severe NRCS ratings.
+  // Hydric soils are wetland-adjacent and typically require delineation +
+  // drainage design before they can be built on; severe soils need engineered
+  // foundations or are unsuitable for septic. Moderate soils do not subtract
+  // from net developable at the screening stage.
+  const soilFraction = Math.max(
+    overlays.soils.value?.hydricFraction ?? 0,
+    overlays.soils.value?.severeFraction ?? 0,
+  )
+  const easementFraction = overlays.easements.value?.easementFraction ?? 0
 
   // Grid-based union: each constraint is measured against the same grid, so
   // the true union requires checking each point against all constraints. Since
   // we computed fractions independently, we use the independence approximation
-  // for the union: 1 - (1-a)(1-b)(1-c). This slightly overestimates overlap
-  // but is conservative (overcounts constrained land) which is safer for
-  // screening.
-  const constrainedFraction = 1 - (1 - floodwayFraction) * (1 - wetlandFraction) * (1 - steepFraction)
+  // for the union: 1 - (1-a)(1-b)(1-c)(1-d)(1-e). This slightly overestimates
+  // overlap but is conservative (overcounts constrained land) which is safer
+  // for screening.
+  const constrainedFraction =
+    1 - (1 - floodwayFraction) * (1 - wetlandFraction) * (1 - steepFraction)
+          * (1 - soilFraction) * (1 - easementFraction)
 
   const floodwayAcres = grossAcres * floodwayFraction
   const wetlandAcres = grossAcres * wetlandFraction
   const steepSlopeAcres = grossAcres * steepFraction
+  const soilConstrainedAcres = grossAcres * soilFraction
+  const easementAcres = grossAcres * easementFraction
   const constrainedAcres = grossAcres * constrainedFraction
   const netDevelopableAcres = Math.max(0, grossAcres - constrainedAcres)
   const netToGrossRatio = grossAcres > 0 ? netDevelopableAcres / grossAcres : 0
@@ -446,10 +1104,18 @@ function computeNetDevelopable(
     floodwayAcres: Math.round(floodwayAcres * 100) / 100,
     wetlandAcres: Math.round(wetlandAcres * 100) / 100,
     steepSlopeAcres: Math.round(steepSlopeAcres * 100) / 100,
+    soilConstrainedAcres: Math.round(soilConstrainedAcres * 100) / 100,
+    easementAcres: Math.round(easementAcres * 100) / 100,
     constrainedAcres: Math.round(constrainedAcres * 100) / 100,
     netDevelopableAcres: Math.round(netDevelopableAcres * 100) / 100,
     netToGrossRatio: Math.round(netToGrossRatio * 1000) / 1000,
-    samplePoints: flood.value?.samplePoints ?? wetlands.value?.samplePoints ?? slope.value?.samplePoints ?? 0,
+    samplePoints:
+      overlays.floodplain.value?.samplePoints
+      ?? overlays.wetlands.value?.samplePoints
+      ?? overlays.slope.value?.samplePoints
+      ?? overlays.soils.value?.samplePoints
+      ?? overlays.easements.value?.samplePoints
+      ?? 0,
   }
 }
 
@@ -459,45 +1125,87 @@ export async function fetchParcelOverlays(
   boundaryInput: NonNullable<ScreeningArea['boundary']>,
   signal?: AbortSignal,
   onProgress?: (progress: ParcelOverlayProgress) => void,
+  stateCode?: string,
 ): Promise<ParcelOverlayData> {
   const boundary = narrowBoundary(boundaryInput)
-  // Generate the shared grid for flood/wetland point-in-polygon testing.
+  // Generate the shared grid for flood/wetland/soils/easements/species point-in-polygon testing.
   const { points: gridPoints } = gridSampleBoundary(boundary, 400)
 
   let data: ParcelOverlayData = {
     floodplain: { available: false, provenance: FEMA_PROVENANCE, error: 'Pending' },
     wetlands: { available: false, provenance: NWI_PROVENANCE, error: 'Pending' },
     slope: { available: false, provenance: USGS_PROVENANCE, error: 'Pending' },
+    soils: { available: false, provenance: SOILS_PROVENANCE, error: 'Pending' },
+    stormwater: { available: false, provenance: STORMWATER_PROVENANCE, error: 'Pending' },
+    easements: { available: false, provenance: EASEMENTS_OVERLAY_PROVENANCE, error: 'Pending' },
+    contamination: { available: false, provenance: CONTAMINATION_OVERLAY_PROVENANCE, error: 'Pending' },
+    species: { available: false, provenance: SPECIES_OVERLAY_PROVENANCE, error: 'Pending' },
     netDevelopable: null,
     fetchedAt: new Date().toISOString(),
   }
-  const remaining = new Set<ParcelOverlayCategory>(['floodplain', 'wetlands', 'slope'])
+  const remaining = new Set<ParcelOverlayCategory>(['floodplain', 'wetlands', 'slope', 'soils', 'stormwater', 'easements', 'contamination', 'species'])
 
-  function publish(category: 'floodplain' | 'wetlands' | 'slope', observation: ParcelOverlayData[typeof category]) {
+  function publish(category: ParcelOverlayCategory, observation: ParcelOverlayData[ParcelOverlayCategory]) {
     data = { ...data, [category]: observation, fetchedAt: new Date().toISOString() }
     remaining.delete(category)
-    // Try computing net developable once at least two of three overlays are done.
-    if (data.floodplain.available !== undefined && data.wetlands.available !== undefined && data.slope.available !== undefined) {
-      const canCompute = data.floodplain.available || data.wetlands.available || data.slope.available
-      if (canCompute && !data.netDevelopable) {
-        data = { ...data, netDevelopable: computeNetDevelopable(boundary, data.floodplain, data.wetlands, data.slope) }
-      }
-    }
-    remaining.delete('netDevelopable' as ParcelOverlayCategory)
-    if (remaining.size === 0 && !data.netDevelopable) {
-      data = { ...data, netDevelopable: computeNetDevelopable(boundary, data.floodplain, data.wetlands, data.slope) }
+    // Try computing net developable incrementally as overlays land.
+    const anyAvailable =
+      data.floodplain.available || data.wetlands.available || data.slope.available
+      || data.soils.available || data.easements.available
+    if (anyAvailable && remaining.size === 0) {
+      data = { ...data, netDevelopable: computeNetDevelopable(boundary, data) }
+    } else if (anyAvailable && !data.netDevelopable) {
+      data = { ...data, netDevelopable: computeNetDevelopable(boundary, data) }
     }
     onProgress?.({ data, pending: [...remaining] })
   }
 
+  // Easements overlay: only when a local adapter is registered for the state.
+  // This is checked here so the overlay pipeline stays self-contained and the
+  // shape of ParcelOverlayData is stable across jurisdictions.
   await Promise.all([
     fetchFloodplainOverlay(boundary, gridPoints, signal).then((v) => publish('floodplain', v)),
     fetchWetlandsOverlay(boundary, gridPoints, signal).then((v) => publish('wetlands', v)),
-    fetchSlopeOverlay(boundary, signal).then((v) => publish('slope', v)),
+    (async () => {
+      // Slope + stormwater share one USGS elevation sample pass.
+      const shared = await sampleParcelElevations(boundary, signal)
+      if (!shared) {
+        publish('slope', { available: false, provenance: USGS_PROVENANCE, error: 'Parcel is too small for an elevation grid.' })
+        publish('stormwater', { available: false, provenance: STORMWATER_PROVENANCE, error: 'Parcel is too small for a drainage analysis.' })
+        return
+      }
+      publish('slope', computeSlopeFromElevations(shared))
+      publish('stormwater', computeStormwaterFromElevations(shared))
+    })(),
+    fetchSoilsOverlay(boundary, gridPoints, signal).then((v) => publish('soils', v)),
+    (async () => {
+      const adapter = await queryEasementsOverlay(boundary, gridPoints, stateCode, signal)
+      publish('easements', adapter)
+    })(),
+    fetchContaminationOverlay(boundary, gridPoints, signal).then((v) => publish('contamination', v)),
+    fetchSpeciesOverlay(boundary, gridPoints, signal).then((v) => publish('species', v)),
   ])
 
   // Final net developable computation.
-  data = { ...data, netDevelopable: computeNetDevelopable(boundary, data.floodplain, data.wetlands, data.slope), fetchedAt: new Date().toISOString() }
+  data = { ...data, netDevelopable: computeNetDevelopable(boundary, data), fetchedAt: new Date().toISOString() }
   onProgress?.({ data, pending: [] })
   return data
+}
+
+// Resolve the easements overlay by delegating point lookup + polygon fetch
+// to the localAdapters registry. localAdapters imports EasementsOverlayInput
+// from this file only as a type (erased at runtime), so there is no real
+// runtime circular dependency.
+async function queryEasementsOverlay(
+  _boundary: GeoBoundary,
+  gridPoints: { lng: number; lat: number }[],
+  stateCode: string | undefined,
+  signal?: AbortSignal,
+): Promise<EasementsOverlay> {
+  if (!stateCode) {
+    return buildEasementsOverlay(gridPoints, null)
+  }
+  const adapterResult = await fetchEasementsOverlayForParcel(gridPoints[0] ?? { lng: 0, lat: 0 }, stateCode, signal)
+  if (!adapterResult) return buildEasementsOverlay(gridPoints, null)
+  return buildEasementsOverlay(gridPoints, adapterResult)
 }

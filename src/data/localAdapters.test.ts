@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getLocalCoverageSummary, registerLocalAdapter, hasLocalCoverage, type LocalAdapter } from './localAdapters'
+import { getLocalCoverageSummary, registerLocalAdapter, hasLocalCoverage, registerDefaultLocalAdapters, type LocalAdapter } from './localAdapters'
 
 describe('localAdapters registry', () => {
   it('starts empty', () => {
@@ -23,5 +23,14 @@ describe('localAdapters registry', () => {
     expect(hasLocalCoverage('easements', 'CA')).toBe(false)
     const summary = getLocalCoverageSummary()
     expect(summary.easements).toContain('Travis County, TX')
+  })
+
+  it('registers the Travis County easement adapter via registerDefaultLocalAdapters and is idempotent', () => {
+    registerDefaultLocalAdapters()
+    registerDefaultLocalAdapters() // idempotent — should not duplicate
+    expect(hasLocalCoverage('easements', 'TX')).toBe(true)
+    const summary = getLocalCoverageSummary()
+    const travis = summary.easements.filter((j) => j === 'Travis County, TX')
+    expect(travis).toHaveLength(1)
   })
 })

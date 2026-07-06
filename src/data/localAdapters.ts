@@ -1,5 +1,6 @@
 import type { Coordinates, DataProvenance } from '../types/site'
 import type { OfficialObservation } from './officialDataProvider'
+import type { EasementsOverlayInput } from './parcelOverlayProvider'
 
 // ─── Local jurisdiction adapter framework ───────────────────────────────
 //
@@ -113,6 +114,39 @@ export async function fetchEasements(coordinates: Coordinates, stateCode: string
   }
 }
 
+// Resolve the parcel-wide easements overlay from the registered local
+// easement adapter for the state. Returns null when no adapter is registered
+// (the caller — parcelOverlayProvider — surfaces the standard ALTA/title
+// fallback). Returns an EasementsOverlayInput with whatever presence/
+// absence signal the adapter can return. Easement polygon geometry is
+// returned only when an adapter publishes it; otherwise we surface presence
+// only and the overlay code applies a conservative placeholder fraction.
+export async function fetchEasementsOverlayForParcel(
+  coordinates: Coordinates,
+  stateCode: string,
+  signal?: AbortSignal,
+): Promise<EasementsOverlayInput | null> {
+  const adapters = getLocalAdapters('easements', coordinates, stateCode)
+  if (!adapters.length) return null
+  for (const adapter of adapters) {
+    try {
+      const result = await adapter.query(coordinates, signal)
+      if (result.available && result.value) {
+        const v = result.value as EasementData & { polygonRings?: number[][][] }
+        return {
+          hasRecordedEasements: v.hasRecordedEasements,
+          easementTypes: v.easementTypes,
+          sourceLayer: v.sourceLayer,
+          polygonRings: v.polygonRings,
+        }
+      }
+    } catch {
+      // try next adapter
+    }
+  }
+  return null
+}
+
 // ─── Coverage summary ───────────────────────────────────────────────────
 
 export function getLocalCoverageSummary(): Record<LocalCategory, string[]> {
@@ -123,4 +157,213 @@ export function getLocalCoverageSummary(): Record<LocalCategory, string[]> {
     }
   }
   return summary
+}
+
+// ─── Registered adapters ────────────────────────────────────────────────
+//
+// Concrete adapters are registered at module load. Each one is a thin wrapper
+// over a verified public GIS service. See PROJECT_RECORD.md before adding a
+// new jurisdiction — adapters must point at authoritative sources and degrade
+// honestly when the service is offline or CORS-blocked.
+
+// Travis County, TX: easement/ROW screening adapter.
+//
+// Travis County does not publish a dedicated countywide easement polygon
+// service that LandLens can verify. We wire the already-verified Travis
+// County Tax Maps parcel layer and inspect its returned parcel attributes for
+// any easement/ROW flag fields (common Texas appraisal-district field names
+// such as EASEMENT, EAS, EAS_YN, NUM_EAS, ROW, ROW_YN). If such a field is
+// present on the parcel that contains the selected point and its value is
+// truthy, the adapter reports a recorded-easement flag at that parcel.
+// Otherwise the adapter reports no recorded easement from this source.
+//
+// Texas appraisal-district parcel layers do not generally expose a dedicated
+// countywide easement polygon service, but several publish the parcel row with
+// easement/ROW flag attributes. Each `makeTexasCountyEasementAdapter` factory
+// below points at the already-verified county parcel FeatureServer used by the
+// `parcelProvider.ts` registry and inspects the returned attributes for any
+// easement/ROW flag field name (a common Texas appraisal-district convention).
+// A positive flag may undercount easements and the overlay applies only a small
+// placeholder acreage subtraction. A title commitment and ALTA/NSPS land title
+// survey remain the authoritative source — `EASEMENTS_OVERLAY_PROVENANCE` says
+// so explicitly to the user.
+
+// Field names commonly used by Texas appraisal district parcel layers to flag
+// easements or ROW on the parcel row itself. None are guaranteed to exist on
+// every release; LandLens inspects whatever the service returns at query time.
+const EASEMENT_FIELD_NAMES = [
+  'easement', 'eas_yn', 'eas_flag', 'num_eas', 'easements',
+  'has_easement', 'easement_yn',
+  'row', 'row_yn', 'row_flag', 'has_row',
+]
+
+function truthyEasementValue(value: string | number | null | undefined): boolean {
+  if (value === null || value === undefined) return false
+  const str = String(value).trim().toLowerCase()
+  if (!str) return false
+  return /^(y|yes|t|true|1|easement|row)/.test(str) && !/^(no|n|false|f|0)$/.test(str)
+}
+
+interface TexasCountyEasementSpec {
+  id: string
+  jurisdiction: string
+  serviceUrl: string
+  bounds: { south: number; west: number; north: number; east: number }
+  sourceName: string
+  sourceUrl: string
+  timeoutMs?: number
+}
+
+function makeTexasCountyEasementAdapter(spec: TexasCountyEasementSpec): LocalAdapter {
+  const provenance: DataProvenance = {
+    source: `${spec.sourceName} (easement flag)`,
+    sourceUrl: spec.sourceUrl,
+    vintage: 'Live county parcel service',
+    coverageNote: `${spec.jurisdiction} does not expose a dedicated countywide easement polygon service. LandLens inspects the parcel layer for recorded-easement/ROW attributes on the parcel that contains the point. This screens for easement-flagged parcels only; a title commitment and ALTA/NSPS land title survey remain the authoritative source.`,
+  }
+  async function query(coordinates: Coordinates, signal?: AbortSignal): Promise<LocalAdapterResult> {
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), spec.timeoutMs ?? 12_000)
+    const abort = () => controller.abort()
+    signal?.addEventListener('abort', abort, { once: true })
+    try {
+      const params = new URLSearchParams({
+        f: 'json',
+        geometry: `${coordinates.lng},${coordinates.lat}`,
+        geometryType: 'esriGeometryPoint',
+        inSR: '4326',
+        spatialRel: 'esriSpatialRelIntersects',
+        outFields: '*',
+        returnGeometry: 'false',
+        outSR: '4326',
+      })
+      const response = await fetch(
+        `${spec.serviceUrl}/query?${params}`,
+        { signal: controller.signal },
+      )
+      if (!response.ok) throw new Error(`${spec.jurisdiction} parcel service returned ${response.status}`)
+      const data = await response.json() as { features?: Array<{ attributes?: Record<string, string | number | null> }>; error?: { message?: string } }
+      if (data.error) throw new Error(data.error.message || `${spec.jurisdiction} parcel query failed`)
+      const feature = data.features?.[0]
+      if (!feature || !feature.attributes) {
+        return { available: false, provenance, error: `No ${spec.jurisdiction} parcel found at this point.` }
+      }
+      const matchedTypes: string[] = []
+      const lowerAttr = new Map<string, string>()
+      for (const [k, v] of Object.entries(feature.attributes)) {
+        lowerAttr.set(k.toLowerCase(), String(v ?? ''))
+      }
+      for (const candidate of EASEMENT_FIELD_NAMES) {
+        const value = lowerAttr.get(candidate.toLowerCase())
+        if (value !== undefined && truthyEasementValue(value)) {
+          matchedTypes.push(candidate.toUpperCase())
+        }
+      }
+      return {
+        available: true,
+        value: {
+          hasRecordedEasements: matchedTypes.length > 0,
+          easementTypes: matchedTypes.length ? matchedTypes : ['none flag'],
+          sourceLayer: spec.sourceName,
+        } as EasementData,
+        provenance,
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { available: false, provenance, error: message }
+    } finally {
+      window.clearTimeout(timeout)
+      signal?.removeEventListener('abort', abort)
+    }
+  }
+  return {
+    id: spec.id,
+    category: 'easements',
+    jurisdiction: spec.jurisdiction,
+    stateCode: 'TX',
+    bounds: spec.bounds,
+    query,
+  }
+}
+
+// The verified Texas county parcel layers (mirrors parcelProvider.ts). Each
+// adapter here queries the same authoritative parcel FeatureServer the parcel
+// registry uses, then inspects returned attributes for easement/ROW flags.
+const TX_COUNTY_EASEMENT_SPECS: TexasCountyEasementSpec[] = [
+  {
+    id: 'travis-county-tx-easements',
+    jurisdiction: 'Travis County, TX',
+    serviceUrl: 'https://taxmaps.traviscountytx.gov/arcgis/rest/services/Parcels/FeatureServer/0',
+    bounds: { south: 30.01, west: -98.2, north: 30.65, east: -97.36 },
+    sourceName: 'Travis County Tax Maps parcel layer',
+    sourceUrl: 'https://taxmaps.traviscountytx.gov/arcgis/rest/services/Parcels/FeatureServer/0',
+  },
+  {
+    id: 'dallas-county-tx-easements',
+    jurisdiction: 'Dallas County, TX',
+    serviceUrl: 'https://services2.arcgis.com/rwnOSbfKSwyTBcwN/arcgis/rest/services/CRMHostedLayers/FeatureServer/13',
+    bounds: { south: 32.55, west: -97.04, north: 33.06, east: -96.51 },
+    sourceName: 'City of Dallas GIS certified tax parcels',
+    sourceUrl: 'https://services2.arcgis.com/rwnOSbfKSwyTBcwN/arcgis/rest/services/CRMHostedLayers/FeatureServer/13',
+  },
+  {
+    id: 'harris-county-tx-easements',
+    jurisdiction: 'Harris County, TX',
+    serviceUrl: 'https://services.arcgis.com/su8ic9KbA7PYVxPS/arcgis/rest/services/Harris_County_Parcels/FeatureServer/1',
+    bounds: { south: 29.49, west: -95.98, north: 30.19, east: -94.89 },
+    sourceName: 'Harris County GIS / HCAD parcel polygons',
+    sourceUrl: 'https://services.arcgis.com/su8ic9KbA7PYVxPS/arcgis/rest/services/Harris_County_Parcels/FeatureServer/1',
+  },
+  {
+    id: 'bexar-county-tx-easements',
+    jurisdiction: 'Bexar County, TX',
+    serviceUrl: 'https://maps.bcad.org/arcgis/rest/services/PAMapSearch/MapServer/6',
+    bounds: { south: 29.11, west: -98.82, north: 29.77, east: -98.11 },
+    sourceName: 'Bexar Appraisal District public parcel layer',
+    sourceUrl: 'https://maps.bcad.org/arcgis/rest/services/PAMapSearch/MapServer/6',
+  },
+  {
+    id: 'collin-county-tx-easements',
+    jurisdiction: 'Collin County, TX',
+    serviceUrl: 'https://services2.arcgis.com/uXyoacYrZTPTKD3R/arcgis/rest/services/CCAD_Parcel_Feature_Set/FeatureServer/4',
+    bounds: { south: 32.89, west: -96.93, north: 33.47, east: -96.23 },
+    sourceName: 'Collin Central Appraisal District parcels',
+    sourceUrl: 'https://services2.arcgis.com/uXyoacYrZTPTKD3R/arcgis/rest/services/CCAD_Parcel_Feature_Set/FeatureServer/4',
+  },
+  {
+    id: 'williamson-county-tx-easements',
+    jurisdiction: 'Williamson County, TX',
+    serviceUrl: 'https://services1.arcgis.com/Xff0bbfp6vwIWmlU/arcgis/rest/services/WCAD_Tax_Parcels/FeatureServer/0',
+    bounds: { south: 30.39, west: -98.06, north: 30.91, east: -97.14 },
+    sourceName: 'Williamson Central Appraisal District tax parcels',
+    sourceUrl: 'https://services1.arcgis.com/Xff0bbfp6vwIWmlU/arcgis/rest/services/WCAD_Tax_Parcels/FeatureServer/0',
+  },
+  {
+    id: 'montgomery-county-tx-easements',
+    jurisdiction: 'Montgomery County, TX',
+    serviceUrl: 'https://services1.arcgis.com/PRoAPGnMSUqvTrzq/arcgis/rest/services/Tax_Parcel_view/FeatureServer/0',
+    bounds: { south: 30.01, west: -95.87, north: 30.64, east: -95.07 },
+    sourceName: 'Montgomery County GIS / MCAD Tax Parcel View',
+    sourceUrl: 'https://services1.arcgis.com/PRoAPGnMSUqvTrzq/arcgis/rest/services/Tax_Parcel_view/FeatureServer/0',
+  },
+  {
+    id: 'tarrant-county-tx-easements',
+    jurisdiction: 'Tarrant County, TX',
+    serviceUrl: 'https://services3.arcgis.com/9GbPfrQRyZbRsXU4/arcgis/rest/services/Basemap_Layer/FeatureServer/113',
+    bounds: { south: 32.49, west: -97.61, north: 33.06, east: -97.0 },
+    sourceName: 'Tarrant Appraisal District parcel layer',
+    sourceUrl: 'https://services3.arcgis.com/9GbPfrQRyZbRsXU4/arcgis/rest/services/Basemap_Layer/FeatureServer/113',
+  },
+]
+
+// Register the verified local adapters at app startup. Kept as an explicit
+// function rather than auto-registering at module load so that the registry
+// is empty in unit tests (localAdapters.test.ts expects "starts empty" by
+// default) and populated only when the production app boots. Idempotent —
+// calling this more than once is safe because registerLocalAdapter dedupes
+// by adapter id.
+export function registerDefaultLocalAdapters(): void {
+  for (const spec of TX_COUNTY_EASEMENT_SPECS) {
+    registerLocalAdapter(makeTexasCountyEasementAdapter(spec))
+  }
 }

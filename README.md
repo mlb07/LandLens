@@ -21,7 +21,7 @@ npm run build      # tsc + vite build
 
 - All 50 states with accurate state boundaries, state-scoped address search, street/terrain layers, click selection, and a draggable pin
 - Live FEMA flood-zone, USGS terrain, Census road, FWS wetland, USDA soils, EPA contamination, USFWS critical habitat, EPA water service area, Census building permits, USGS stormwater drainage, and local easement screening
-- Parcel-wide overlays: when a parcel boundary is loaded, FEMA floodplain %, NWI wetland %, USGS slope stats, and net developable acreage are computed across the full parcel
+- Parcel-wide overlays: when a parcel boundary is loaded, FEMA floodplain %, NWI wetland %, USGS slope stats, NRCS hydric/severe-soil %, USGS-3DEP parcel drainage, local easement/ROW intersection (where a local adapter is registered), EPA FRS contamination facility count, USFWS critical-habitat % intersect, and net developable acreage are computed across the full parcel
 - Analysis-first workflow with progressive results as 12 official sources return
 - Hybrid gate + 13-category weighted feasibility score with hard-gate manual-diligence routing, regional hazard modifier (sea-level rise, wildfire, radon), and confidence penalty
 - All 13 scoring categories wired to data sources — no fabricated values, no neutral fallbacks

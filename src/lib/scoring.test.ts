@@ -135,7 +135,12 @@ describe('analyzeSite — parcel overlays', () => {
     floodplain: { available: true, value: { sfhaFraction: 0, floodwayFraction: 0, floodwayInCore: false, zoneSummary: 'X', risk: 'Low' as const, samplePoints: 400 }, provenance: { source: 'FEMA', sourceUrl: 'x' } },
     wetlands: { available: true, value: { wetlandFraction: 0, wetlandTypeCounts: {}, samplePoints: 400 }, provenance: { source: 'NWI', sourceUrl: 'x' } },
     slope: { available: true, value: { meanSlopePercent: 3, p90SlopePercent: 5, maxSlopePercent: 8, fractionOver15: 0, fractionOver20: 0, fractionOver30: 0, samplePoints: 25, spacingMeters: 40 }, provenance: { source: 'USGS', sourceUrl: 'x' } },
-    netDevelopable: { grossAcres: 10, floodwayAcres: 0, wetlandAcres: 0, steepSlopeAcres: 0, constrainedAcres: 0, netDevelopableAcres: 10, netToGrossRatio: 1.0, samplePoints: 400 },
+    soils: { available: true, value: { hydricFraction: 0, severeFraction: 0, moderateFraction: 0, dominantRating: 'slight' as const, soilTypeCounts: { 'Sandy loam': 1 }, samplePoints: 400 }, provenance: { source: 'NRCS', sourceUrl: 'x' } },
+    stormwater: { available: true, value: { drainageDirection: 'S', slopeTowardLowPoint: 2.5, hasPositiveOutfall: true, flatnessIndex: 0.6, estimatedDetentionSuitability: 'good' as const, screeningLevel: 'good' as const, samplePoints: 25, spacingMeters: 40 }, provenance: { source: 'USGS', sourceUrl: 'x' } },
+    easements: { available: true, value: { easementFraction: 0, easementTypes: [], sourceLayer: 'Travis County Tax Maps parcel layer', samplePoints: 400 }, provenance: { source: 'Local GIS', sourceUrl: 'x' } },
+    contamination: { available: true, value: { facilityCount: 0, hasMajorFlag: false, facilityTypes: [], nearestName: '', bufferMeters: 100, samplePoints: 400 }, provenance: { source: 'EPA FRS', sourceUrl: 'x' } },
+    species: { available: true, value: { criticalHabitatHit: false, criticalHabitatLayers: [], speciesCount: 0, habitatFraction: 0, samplePoints: 400 }, provenance: { source: 'USFWS ECOS', sourceUrl: 'x' } },
+    netDevelopable: { grossAcres: 10, floodwayAcres: 0, wetlandAcres: 0, steepSlopeAcres: 0, soilConstrainedAcres: 0, easementAcres: 0, constrainedAcres: 0, netDevelopableAcres: 10, netToGrossRatio: 1.0, samplePoints: 400 },
     fetchedAt: new Date().toISOString(),
   }
 
@@ -155,6 +160,104 @@ describe('analyzeSite — parcel overlays', () => {
     const floodwayOverlays = { ...goodOverlays, floodplain: { ...goodOverlays.floodplain, value: { ...goodOverlays.floodplain.value!, floodwayFraction: 0.15, floodwayInCore: true, risk: 'Floodway' as const } } }
     const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, floodwayOverlays)
     expect(result.hardGates.find((g) => g.id === 'floodway-in-core')?.triggered).toBe(true)
+  })
+
+  it('prefers the parcel-wide soils overlay over the point result', () => {
+    const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, goodOverlays)
+    expect(result.metrics.soils.displayValue).toContain('hydric')
+    expect(result.metrics.soils.displayValue).not.toContain('Well drained')
+  })
+
+  it('prefers the parcel-wide stormwater overlay over the point result', () => {
+    const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, goodOverlays)
+    expect(result.metrics.stormwater.summary).toContain('Parcel-wide')
+  })
+
+  it('prefers the parcel-wide easements overlay when available', () => {
+    const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, goodOverlays)
+    expect(result.metrics.easements.displayValue).toContain('No mapped easements on parcel')
+  })
+
+  it('reduces net developable acres when severe soils are present', () => {
+    const soilOverlays: ParcelOverlayData = {
+      ...goodOverlays,
+      soils: { available: true, value: { hydricFraction: 0.2, severeFraction: 0.4, moderateFraction: 0.1, dominantRating: 'severe' as const, soilTypeCounts: { 'Clay': 1 }, samplePoints: 400 }, provenance: { source: 'NRCS', sourceUrl: 'x' } },
+      netDevelopable: { grossAcres: 10, floodwayAcres: 0, wetlandAcres: 0, steepSlopeAcres: 0, soilConstrainedAcres: 4, easementAcres: 0, constrainedAcres: 4, netDevelopableAcres: 6, netToGrossRatio: 0.6, samplePoints: 400 },
+    }
+    const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, soilOverlays)
+    expect(result.metrics.netDevelopable.displayValue).toContain('6 net / 10 gross')
+    expect(result.metrics.netDevelopable.detail).toContain('hydric/severe soils')
+    expect(result.metrics.soils.score!).toBeLessThanOrEqual(20)
+    expect(result.redFlags.some((f) => f.includes('severe NRCS soil ratings'))).toBe(true)
+  })
+
+  it('reduces net developable acres when easements are present', () => {
+    const easeOverlays: ParcelOverlayData = {
+      ...goodOverlays,
+      easements: { available: true, value: { easementFraction: 0.1, easementTypes: ['EASEMENT'], sourceLayer: 'Travis County Tax Maps parcel layer', samplePoints: 400 }, provenance: { source: 'Local GIS', sourceUrl: 'x' } },
+      netDevelopable: { grossAcres: 10, floodwayAcres: 0, wetlandAcres: 0, steepSlopeAcres: 0, soilConstrainedAcres: 0, easementAcres: 1, constrainedAcres: 1, netDevelopableAcres: 9, netToGrossRatio: 0.9, samplePoints: 400 },
+    }
+    const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, easeOverlays)
+    expect(result.metrics.netDevelopable.displayValue).toContain('9 net / 10 gross')
+    expect(result.metrics.netDevelopable.detail).toContain('mapped easements/ROW')
+  })
+
+  it('easements overlay still renders unavailable when no adapter covers the state', () => {
+    const noEasements: ParcelOverlayData = {
+      ...goodOverlays,
+      easements: { available: false, provenance: { source: 'No local easement adapter', sourceUrl: 'x' }, error: 'No local GIS easement adapter registered.' },
+    }
+    const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, noEasements)
+    expect(result.metrics.easements.status).toBe('unknown')
+  })
+
+  it('prefers the parcel-wide contamination overlay over the point result', () => {
+    const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, goodOverlays)
+    expect(result.metrics.contamination.displayValue).toContain('on parcel')
+    expect(result.metrics.contamination.displayValue).not.toContain('(point)')
+  })
+
+  it('prefers the parcel-wide species overlay over the point result', () => {
+    const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, goodOverlays)
+    expect(result.metrics.species.displayValue).toContain('on parcel')
+    expect(result.metrics.species.displayValue).not.toContain('(point)')
+  })
+
+  it('triggers contamination gate from parcel-wide overlay major flag', () => {
+    const contaminated: ParcelOverlayData = {
+      ...goodOverlays,
+      contamination: { available: true, value: { facilityCount: 2, hasMajorFlag: true, facilityTypes: ['RCRA'], nearestName: 'Acme Chemical', bufferMeters: 100, samplePoints: 400 }, provenance: { source: 'EPA FRS', sourceUrl: 'x' } },
+    }
+    const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, contaminated)
+    expect(result.gatedToManual).toBe(true)
+    expect(result.hardGates.find((g) => g.id === 'contamination')?.triggered).toBe(true)
+    expect(result.metrics.contamination.displayValue).toContain('on parcel')
+  })
+
+  it('triggers species-historic gate from parcel-wide overlay habitat hit', () => {
+    const habitat: ParcelOverlayData = {
+      ...goodOverlays,
+      species: { available: true, value: { criticalHabitatHit: true, criticalHabitatLayers: ['Golden-cheeked Warbler'], speciesCount: 1, habitatFraction: 0.35, samplePoints: 400 }, provenance: { source: 'USFWS ECOS', sourceUrl: 'x' } },
+    }
+    const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, habitat)
+    expect(result.gatedToManual).toBe(true)
+    expect(result.hardGates.find((g) => g.id === 'species-historic')?.triggered).toBe(true)
+    expect(result.metrics.species.displayValue).toContain('35% of parcel')
+  })
+
+  it('does NOT subtract contamination or critical habitat from net developable acreage', () => {
+    // Even with a major-flag contamination + a critical-habitat hit covering
+    // half the parcel, the net developable acres remain 10 (gated sites
+    // still compute a score for transparency, but those categories are gates
+    // — not land-use takeouts — so they should not shrink the buildable area).
+    const gated: ParcelOverlayData = {
+      ...goodOverlays,
+      contamination: { available: true, value: { facilityCount: 2, hasMajorFlag: true, facilityTypes: ['RCRA'], nearestName: 'Acme Chemical', bufferMeters: 100, samplePoints: 400 }, provenance: { source: 'EPA FRS', sourceUrl: 'x' } },
+      species: { available: true, value: { criticalHabitatHit: true, criticalHabitatLayers: ['Golden-cheeked Warbler'], speciesCount: 1, habitatFraction: 0.5, samplePoints: 400 }, provenance: { source: 'USFWS ECOS', sourceUrl: 'x' } },
+    }
+    const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, gated)
+    expect(result.metrics.netDevelopable.displayValue).toContain('10 net / 10 gross')
+    expect(result.gatedToManual).toBe(true)
   })
 })
 
