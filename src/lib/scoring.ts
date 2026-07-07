@@ -303,17 +303,30 @@ function accessMetric(data: OfficialSiteData['road'] | undefined, inputs: SiteIn
   }
 }
 
-function marketMetric(demographics?: OfficialSiteData['demographics'], bps?: OfficialSiteData['bps']): MetricResult {
+function marketMetric(inputs: SiteInputs, demographics?: OfficialSiteData['demographics'], bps?: OfficialSiteData['bps']): MetricResult {
   const hasDemo = demographics?.available && demographics.value
   const hasBps = bps?.available && bps.value
 
   if (!hasDemo && !hasBps) {
     return missingMetric(
       'market',
-      'Market support uses ACS population trend and Census building permits when configured. Add VITE_CENSUS_API_KEY to enable both. Employment, income, supply, and absorption still need separate study.',
+      'Market support uses ACS population trend and Census building permits when configured. Add VITE_CENSUS_API_KEY to enable both. Employment, income, supply, and intended-use-specific absorption still need separate study.',
       demographics?.provenance,
     )
   }
+
+  // Census BPS measures residential-structure permits (1-unit, 2-4 unit, 5+
+  // units). It is a strong demand proxy for `residential` and a supportive (but
+  // weaker) signal for `mixed-use`; it does not measure commercial or
+  // industrial absorption directly. Reflect that in the weighting so a
+  // residential-intent site gets full credit on the permit trend while a
+  // commercial/industrial-intent site leans more on the demographic signal and
+  // surfaces a missing-data caveat.
+  const intendedUse = inputs.intendedUse
+  const bpsIsDirectSignal = intendedUse === 'residential' || intendedUse === 'mixed-use'
+  // Permit-trend weight in the composite when both demo + BPS are available.
+  const bpsWeightWhenBoth = bpsIsDirectSignal ? 0.4 : intendedUse === 'other' ? 0.4 : 0.2
+  const popWeightWhenBoth = 1 - bpsWeightWhenBoth
 
   // Combine population growth and building permits for a composite market score.
   let popScore = 65 // neutral default when only BPS is available
@@ -328,26 +341,34 @@ function marketMetric(demographics?: OfficialSiteData['demographics'], bps?: Off
   let bpsDisplay = ''
   if (hasBps) {
     const trend = bps!.value!.permitTrend
-    bpsScore = trend >= 20 ? 90 : trend >= 5 ? 78 : trend >= 0 ? 65 : trend >= -10 ? 45 : 25
+    // For non-residential / non-mixed uses the permit signal is informative but
+    // indirect — cap its upside so a hot residential market doesn't pin the
+    // commercial/industrial market sub-score at 90.
+    const cap = bpsIsDirectSignal ? 100 : intendedUse === 'other' ? 100 : 78
+    bpsScore = Math.min(cap, trend >= 20 ? 90 : trend >= 5 ? 78 : trend >= 0 ? 65 : trend >= -10 ? 45 : 25)
     bpsDisplay = `permits ${trend > 0 ? '+' : ''}${trend.toFixed(1)}%`
   }
 
-  // Weight: 60% population, 40% permits when both available; either alone when only one.
-  const score = hasDemo && hasBps ? Math.round(popScore * 0.6 + bpsScore * 0.4) : hasDemo ? popScore : bpsScore
+  const score = hasDemo && hasBps ? Math.round(popScore * popWeightWhenBoth + bpsScore * bpsWeightWhenBoth) : hasDemo ? popScore : bpsScore
   const displayParts = [demoDisplay, bpsDisplay].filter(Boolean)
   const provenance = hasBps ? bps!.provenance : demographics!.provenance
+
+  const intendedUseLabel = intendedUse === 'mixed-use' ? 'mixed-use' : intendedUse
+  const weakSignalNote = bpsIsDirectSignal
+    ? ''
+    : ` Census BPS measures residential permit trend; for ${intendedUseLabel} use it is a supportive but indirect signal — pull intended-use-specific absorption, employment, and income from a market study.`
 
   return {
     category: 'market', label: CATEGORY_LABELS.market, score, weight: CATEGORY_WEIGHTS.market,
     status: 'official', provenance,
-    displayValue: displayParts.join(' · '),
+    displayValue: displayParts.join(' · ') + (bpsIsDirectSignal ? '' : ` · ${intendedUseLabel}`),
     summary: hasDemo && hasBps
-      ? `ACS ${demoDisplay}; BPS ${bpsDisplay} in ${bps!.value!.countyName}.`
+      ? `ACS ${demoDisplay}; BPS ${bpsDisplay} in ${bps!.value!.countyName}.${bpsIsDirectSignal ? '' : ` BPS is a residential signal — it is ${intendedUse === 'other' ? 'a weak' : 'an indirect'} proxy for ${intendedUseLabel} demand.`}`
       : hasDemo
         ? `ACS estimates show ${popScore >= 75 ? 'strong' : popScore >= 50 ? 'stable' : 'weak'} tract population change.`
-        : `Census BPS shows ${bpsScore >= 75 ? 'strong' : bpsScore >= 50 ? 'stable' : 'weak'} permit trend in ${bps!.value!.countyName}.`,
+        : `Census BPS shows ${bpsScore >= 75 ? 'strong' : bpsScore >= 50 ? 'stable' : 'weak'} permit trend in ${bps!.value!.countyName}.${bpsIsDirectSignal ? '' : ` BPS is a residential signal — it is an indirect proxy for ${intendedUseLabel} demand.`}`,
     detail: hasBps
-      ? `Building permits: ${bps!.value!.totalPermits2024} in 2024 (${bps!.value!.permitsPerThousand2024}/1k pop). Permit trend: ${bps!.value!.permitTrend > 0 ? '+' : ''}${bps!.value!.permitTrend}%. ${hasDemo ? `ACS population: ${demographics!.value!.priorPopulation.toLocaleString()} → ${demographics!.value!.currentPopulation.toLocaleString()}.` : ''} Population and permits are market signals; intended-use-specific demand, income, and absorption need their own study.`
+      ? `Building permits: ${bps!.value!.totalPermits2024} in 2024 (${bps!.value!.permitsPerThousand2024}/1k pop). Permit trend: ${bps!.value!.permitTrend > 0 ? '+' : ''}${bps!.value!.permitTrend}%. ${hasDemo ? `ACS population: ${demographics!.value!.priorPopulation.toLocaleString()} → ${demographics!.value!.currentPopulation.toLocaleString()}.` : ''} Population and permits are market signals; intended-use-specific demand, income, and absorption need their own study.${weakSignalNote}`
       : `ACS 5-year estimate changed from ${demographics!.value!.priorPopulation.toLocaleString()} to ${demographics!.value!.currentPopulation.toLocaleString()}. Population is one market signal; permits, income, and absorption need their own study.`,
   }
 }
@@ -693,7 +714,7 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
     easements: easementsMetric(official?.easements, overlays?.easements),
     contamination: contaminationMetric(official?.contamination, overlays?.contamination),
     species: speciesMetric(official?.species, overlays?.species),
-    market: marketMetric(official?.demographics, official?.bps),
+    market: marketMetric(inputs, official?.demographics, official?.bps),
   }
 
   const hardGates = evaluateHardGates(metrics, inputs, official, overlays)
@@ -790,6 +811,9 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
   if (inputs.utilitiesNearby === 'unknown') unknowns.push('Utility availability and capacity are unknown.')
   if (!inputs.zoningNotes.trim()) unknowns.push('Zoning and future land use have not been verified.')
   if (inputs.roadFrontage === 'unknown') unknowns.push('Legal road frontage has not been verified.')
+  if (metrics.market.status === 'official' && inputs.intendedUse !== 'residential' && inputs.intendedUse !== 'mixed-use') {
+    unknowns.push(`Census BPS permits are a residential-structure signal; for ${inputs.intendedUse} use, a market study of ${inputs.intendedUse === 'commercial' ? 'retail/commercial rents, vacancy, and household income' : inputs.intendedUse === 'industrial' ? 'industrial vacancy, lease rates, and employment' : 'intended-use demand and absorption'} is still needed.`)
+  }
   unknowns.push(hasOverlays
     ? 'Parcel-wide overlays are loaded for FEMA, NWI, slope, soils, stormwater, easements, EPA contamination, and USFWS critical habitat. Net developable acreage subtracts floodway, wetlands, steep slope, hydric/severe soils, and mapped easements. Setbacks, buffers, contamination and critical habitat are gates (not land-use takeouts) and are not subtracted from net developable acreage.'
     : hasParcelBoundary

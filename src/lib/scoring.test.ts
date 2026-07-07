@@ -261,6 +261,36 @@ describe('analyzeSite — parcel overlays', () => {
   })
 })
 
+describe('analyzeSite — intended-use market weighting', () => {
+  it('gives full permit-trend credit to residential intent', () => {
+    const residential = analyzeSite(COORDS, { ...GOOD_INPUTS, intendedUse: 'residential' }, fullOfficial)
+    const industrial = analyzeSite(COORDS, { ...GOOD_INPUTS, intendedUse: 'industrial' }, fullOfficial)
+    // Residential should score at least as high as industrial on the market
+    // category because Census BPS is a residential-structure signal.
+    expect(residential.metrics.market.score!).toBeGreaterThanOrEqual(industrial.metrics.market.score!)
+  })
+
+  it('caps the BPS contribution for commercial/industrial intent', () => {
+    // BPS permits trend is 40% (full honest credit at residential). For industrial
+    // we cap at 78; the industrial market detail should mention the limitation.
+    const industrial = analyzeSite(COORDS, { ...GOOD_INPUTS, intendedUse: 'industrial' }, fullOfficial)
+    expect(industrial.metrics.market.displayValue).toContain('industrial')
+    expect(industrial.metrics.market.detail).toContain('indirect')
+    expect(industrial.unknowns.some((u) => /industrial/.test(u))).toBe(true)
+  })
+
+  it('does not flag a market unknown for residential intent', () => {
+    const residential = analyzeSite(COORDS, { ...GOOD_INPUTS, intendedUse: 'residential' }, fullOfficial)
+    expect(residential.unknowns.some((u) => /indirect market signal|residential-structure signal/.test(u))).toBe(false)
+  })
+
+  it('still produces a market score when only demographics are available', () => {
+    const demoOnly = analyzeSite(COORDS, { ...GOOD_INPUTS, intendedUse: 'commercial' }, { ...fullOfficial, bps: { available: false, provenance: { source: 'Census', sourceUrl: 'x' } } })
+    expect(demoOnly.metrics.market.score).not.toBeNull()
+    expect(demoOnly.metrics.market.displayValue).toContain('pop')
+  })
+})
+
 describe('analyzeSite — regional hazard modifier', () => {
   it('applies no penalty when hazards are clear', () => {
     const clearHazards: RegionalHazardData = {
