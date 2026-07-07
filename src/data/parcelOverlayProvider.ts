@@ -1,5 +1,5 @@
 import type { DataProvenance, IntendedUse, ScreeningArea } from '../types/site'
-import { boundaryAreaSquareMeters, boundaryToArcGISPolygon, gridSampleBoundary, pointInBoundary, pointToBoundaryDistanceMeters, squareMetersToAcres, type GeoBoundary } from '../lib/geometry'
+import { boundaryAreaSquareMeters, boundaryToArcGISPolygon, gridSampleBoundary, pointInBoundary, pointToBoundaryDistanceMeters, pointToSegmentMeters, squareMetersToAcres, type GeoBoundary } from '../lib/geometry'
 import { fetchEasementsOverlayForParcel } from './localAdapters'
 
 // Accept the ScreeningArea boundary shape (which has a union type) and narrow
@@ -128,8 +128,11 @@ export interface SetbackOverlay {
   available: boolean
   value?: {
     setbackFraction: number          // 0–1 share of parcel grid within the setback ring
-    setbackDistanceMeters: number    // the uniform perimeter setback used
-    intendedUse: string              // the intended use that drove the distance
+    setbackDistanceMeters: number    // the max setback distance used (for display)
+    frontSetbackMeters: number       // front edge setback (faces the pin/road)
+    sideSetbackMeters: number        // side edge setback
+    rearSetbackMeters: number        // rear edge setback (opposite the pin/road)
+    intendedUse: string              // the intended use that drove the distances
     samplePoints: number
   }
   provenance: DataProvenance
@@ -232,8 +235,8 @@ const SPECIES_OVERLAY_PROVENANCE: DataProvenance = {
 const SETBACK_PROVENANCE: DataProvenance = {
   source: 'Perimeter setback overlay (screening defaults)',
   sourceUrl: '',
-  vintage: 'Conservative US-default setback distances by intended use',
-  coverageNote: 'Uniform perimeter setback applied to the parcel boundary using conservative US-default distances by intended use (residential 20 ft, mixed-use 25 ft, commercial 30 ft, industrial 40 ft, other 20 ft). These are screening defaults, not jurisdiction-specific ordinances. Local zoning codes, plat notes, and HOA covenants may require larger setbacks or different front/side/rear distances. Verify with the local planning department before design.',
+  vintage: 'Conservative US-default front/side/rear setback distances by intended use',
+  coverageNote: 'Perimeter setback applied to the parcel boundary using conservative US-default front/side/rear distances by intended use. The front edge is identified as the boundary edge closest to the selected pin location (a proxy for the road-facing side). Front/side/rear distances: residential 25/10/25 ft, mixed-use 30/15/20 ft, commercial 50/20/30 ft, industrial 50/30/30 ft, other 25/10/25 ft. These are screening defaults, not jurisdiction-specific ordinances. Local zoning codes, plat notes, and HOA covenants may require different distances. Verify with the local planning department before design.',
 }
 
 // ─── Network helper ─────────────────────────────────────────────────────
@@ -1105,17 +1108,57 @@ async function fetchSpeciesOverlay(boundary: GeoBoundary, gridPoints: { lng: num
 // (which edge faces the road) — not yet wired. The uniform distance is the
 // max of typical front/side/rear for the use, which is conservative.
 
-const SETBACK_DISTANCES_METERS: Record<IntendedUse, number> = {
-  residential: 6.1,   // 20 ft
-  'mixed-use': 7.6,    // 25 ft
-  commercial: 9.1,     // 30 ft
-  industrial: 12.2,    // 40 ft
-  other: 6.1,          // 20 ft
+const SETBACK_DISTANCES_METERS: Record<IntendedUse, { front: number; side: number; rear: number }> = {
+  residential: { front: 7.6, side: 3.0, rear: 7.6 },   // 25/10/25 ft
+  'mixed-use': { front: 9.1, side: 4.6, rear: 6.1 },    // 30/15/20 ft
+  commercial: { front: 15.2, side: 6.1, rear: 9.1 },     // 50/20/30 ft
+  industrial: { front: 15.2, side: 9.1, rear: 9.1 },     // 50/30/30 ft
+  other: { front: 7.6, side: 3.0, rear: 7.6 },           // 25/10/25 ft
+}
+
+// Extract the outer ring of a GeoBoundary (first ring of the first polygon).
+function boundaryOuterRing(boundary: GeoBoundary): number[][] | null {
+  if (boundary.type === 'Polygon') {
+    return boundary.coordinates[0] || null
+  }
+  return boundary.coordinates[0]?.[0] || null
+}
+
+// Classify a boundary edge as front/side/rear based on the angle between
+// the centroid-to-edge-midpoint direction and the centroid-to-pin direction.
+// front = within ±60° of the pin direction; rear = within ±60° of the
+// opposite; side = everything else.
+type EdgeClass = 'front' | 'side' | 'rear'
+
+function classifyEdge(
+  edgeStart: number[],
+  edgeEnd: number[],
+  centroid: { lng: number; lat: number },
+  pin: { lng: number; lat: number },
+): EdgeClass {
+  const edgeMidLng = (edgeStart[0] + edgeEnd[0]) / 2
+  const edgeMidLat = (edgeStart[1] + edgeEnd[1]) / 2
+  // Direction vectors from centroid (in approximate meters using local cosine).
+  const cosLat = Math.cos(centroid.lat * Math.PI / 180)
+  const edgeDx = (edgeMidLng - centroid.lng) * 111_320 * cosLat
+  const edgeDy = (edgeMidLat - centroid.lat) * 110_540
+  const pinDx = (pin.lng - centroid.lng) * 111_320 * cosLat
+  const pinDy = (pin.lat - centroid.lat) * 110_540
+  // Normalise and compute the dot product (cosine of the angle between the
+  // two direction vectors).
+  const edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy) || 1
+  const pinLen = Math.sqrt(pinDx * pinDx + pinDy * pinDy) || 1
+  const cosAngle = (edgeDx * pinDx + edgeDy * pinDy) / (edgeLen * pinLen)
+  // cosAngle ≈ 1 → same direction (front); ≈ -1 → opposite (rear); ≈ 0 → perpendicular (side)
+  if (cosAngle > 0.5) return 'front'   // within ±60°
+  if (cosAngle < -0.5) return 'rear'   // within ±60° of opposite
+  return 'side'
 }
 
 export function computeSetbackOverlay(
   boundaryInput: NonNullable<ScreeningArea['boundary']>,
   intendedUse: IntendedUse,
+  pin?: { lng: number; lat: number },
 ): SetbackOverlay {
   try {
     const boundary = narrowBoundary(boundaryInput)
@@ -1123,18 +1166,88 @@ export function computeSetbackOverlay(
     if (!gridPoints.length) {
       return { available: false, provenance: SETBACK_PROVENANCE, error: 'No grid points inside the parcel boundary.' }
     }
-    const setbackMeters = SETBACK_DISTANCES_METERS[intendedUse] ?? SETBACK_DISTANCES_METERS.other
+    const dists = SETBACK_DISTANCES_METERS[intendedUse] ?? SETBACK_DISTANCES_METERS.other
+
+    // If no pin location is provided, fall back to the uniform (max) setback.
+    if (!pin) {
+      const maxDist = Math.max(dists.front, dists.side, dists.rear)
+      let constrainedCount = 0
+      for (const pt of gridPoints) {
+        if (pointToBoundaryDistanceMeters(pt.lng, pt.lat, boundary) < maxDist) constrainedCount += 1
+      }
+      const setbackFraction = gridPoints.length ? constrainedCount / gridPoints.length : 0
+      return {
+        available: true,
+        value: {
+          setbackFraction: Math.round(setbackFraction * 1000) / 1000,
+          setbackDistanceMeters: maxDist,
+          frontSetbackMeters: dists.front,
+          sideSetbackMeters: dists.side,
+          rearSetbackMeters: dists.rear,
+          intendedUse,
+          samplePoints: gridPoints.length,
+        },
+        provenance: SETBACK_PROVENANCE,
+      }
+    }
+
+    // Compute the parcel centroid (average of the outer ring vertices).
+    const outerRing = boundaryOuterRing(boundary)
+    if (!outerRing || outerRing.length < 3) {
+      return { available: false, provenance: SETBACK_PROVENANCE, error: 'Parcel boundary has no outer ring.' }
+    }
+    let centroidLng = 0, centroidLat = 0
+    for (const v of outerRing) { centroidLng += v[0]; centroidLat += v[1] }
+    centroidLng /= outerRing.length
+    centroidLat /= outerRing.length
+    const centroid = { lng: centroidLng, lat: centroidLat }
+
+    // Classify each edge of the outer ring as front/side/rear.
+    const edgeClassifications: EdgeClass[] = []
+    for (let i = 0; i < outerRing.length - 1; i += 1) {
+      edgeClassifications.push(classifyEdge(outerRing[i], outerRing[i + 1], centroid, pin))
+    }
+    // Close the ring if needed.
+    if (outerRing.length > 1) {
+      const last = outerRing[outerRing.length - 1]
+      const first = outerRing[0]
+      if (last[0] !== first[0] || last[1] !== first[1]) {
+        edgeClassifications.push(classifyEdge(last, first, centroid, pin))
+      }
+    }
+
+    // For each grid point, find the nearest edge and check against that
+    // edge's classified setback distance.
     let constrainedCount = 0
     for (const pt of gridPoints) {
-      const dist = pointToBoundaryDistanceMeters(pt.lng, pt.lat, boundary)
-      if (dist < setbackMeters) constrainedCount += 1
+      let minDist = Number.POSITIVE_INFINITY
+      let nearestClass: EdgeClass = 'side'
+      for (let i = 0; i < outerRing.length - 1; i += 1) {
+        const d = pointToSegmentMeters(pt.lng, pt.lat, outerRing[i], outerRing[i + 1])
+        if (d < minDist) { minDist = d; nearestClass = edgeClassifications[i] }
+      }
+      // Close the ring.
+      if (outerRing.length > 1) {
+        const last = outerRing[outerRing.length - 1]
+        const first = outerRing[0]
+        if (last[0] !== first[0] || last[1] !== first[1]) {
+          const d = pointToSegmentMeters(pt.lng, pt.lat, last, first)
+          if (d < minDist) { minDist = d; nearestClass = edgeClassifications[edgeClassifications.length - 1] }
+        }
+      }
+      const threshold = nearestClass === 'front' ? dists.front : nearestClass === 'rear' ? dists.rear : dists.side
+      if (minDist < threshold) constrainedCount += 1
     }
+
     const setbackFraction = gridPoints.length ? constrainedCount / gridPoints.length : 0
     return {
       available: true,
       value: {
         setbackFraction: Math.round(setbackFraction * 1000) / 1000,
-        setbackDistanceMeters: setbackMeters,
+        setbackDistanceMeters: Math.max(dists.front, dists.side, dists.rear),
+        frontSetbackMeters: dists.front,
+        sideSetbackMeters: dists.side,
+        rearSetbackMeters: dists.rear,
         intendedUse,
         samplePoints: gridPoints.length,
       },
@@ -1220,6 +1333,7 @@ export async function fetchParcelOverlays(
   signal?: AbortSignal,
   onProgress?: (progress: ParcelOverlayProgress) => void,
   stateCode?: string,
+  coordinates?: { lng: number; lat: number },
 ): Promise<ParcelOverlayData> {
   const boundary = narrowBoundary(boundaryInput)
   // Generate the shared grid for flood/wetland/soils/easements/species point-in-polygon testing.
@@ -1280,7 +1394,7 @@ export async function fetchParcelOverlays(
     fetchContaminationOverlay(boundary, gridPoints, signal).then((v) => publish('contamination', v)),
     fetchSpeciesOverlay(boundary, gridPoints, signal).then((v) => publish('species', v)),
     // Setback is pure geometry (no network) — resolves instantly.
-    Promise.resolve(publish('setback', computeSetbackOverlay(boundaryInput, 'residential'))),
+    Promise.resolve(publish('setback', computeSetbackOverlay(boundaryInput, 'residential', coordinates))),
   ])
 
   // Final net developable computation.

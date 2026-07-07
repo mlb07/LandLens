@@ -151,7 +151,7 @@ function App() {
       overlaysRef.current = data
       setOverlays(data)
       setAnalysis(analyzeSite(coordinates, inputsRef.current, officialDataRef.current, true, data, hazardsRef.current))
-    }, activeStateCode).then((data) => {
+    }, activeStateCode, coordinates).then((data) => {
       if (!current) return
       overlaysRef.current = data
       setOverlays(data)
@@ -172,7 +172,7 @@ function App() {
   // network-fetched and stay cached when only the intended use changes.
   useEffect(() => {
     if (!parcelBoundary || !overlaysRef.current) return
-    const setback = computeSetbackOverlay(parcelBoundary, inputs.intendedUse)
+    const setback = computeSetbackOverlay(parcelBoundary, inputs.intendedUse, coordinates)
     const updated = { ...overlaysRef.current, setback }
     overlaysRef.current = updated
     setOverlays(updated)

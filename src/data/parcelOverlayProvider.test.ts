@@ -198,7 +198,7 @@ describe('computeNetDevelopable', () => {
       easements: { available: true, value: { easementFraction: 0, easementTypes: [], sourceLayer: 'test', samplePoints: 400 }, provenance: { source: 'Local GIS', sourceUrl: 'x' } },
       contamination: { available: true, value: { facilityCount: 0, hasMajorFlag: false, facilityTypes: [], nearestName: '', bufferMeters: 100, samplePoints: 400 }, provenance: { source: 'EPA FRS', sourceUrl: 'x' } },
       species: { available: true, value: { criticalHabitatHit: false, criticalHabitatLayers: [], speciesCount: 0, habitatFraction: 0, samplePoints: 400 }, provenance: { source: 'USFWS ECOS', sourceUrl: 'x' } },
-      setback: { available: true, value: { setbackFraction: 0, setbackDistanceMeters: 6.1, intendedUse: 'residential', samplePoints: 400 }, provenance: { source: 'Setback', sourceUrl: 'x' } },
+      setback: { available: true, value: { setbackFraction: 0, setbackDistanceMeters: 7.6, frontSetbackMeters: 7.6, sideSetbackMeters: 3.0, rearSetbackMeters: 7.6, intendedUse: 'residential', samplePoints: 400 }, provenance: { source: 'Setback', sourceUrl: 'x' } },
       netDevelopable: null,
       fetchedAt: new Date().toISOString(),
       ...overrides,
@@ -276,7 +276,7 @@ describe('computeNetDevelopable', () => {
 
   it('subtracts setback fraction from net developable', () => {
     const overlays = makeOverlays({
-      setback: { available: true, value: { setbackFraction: 0.15, setbackDistanceMeters: 9.1, intendedUse: 'commercial', samplePoints: 400 }, provenance: { source: 'Setback', sourceUrl: 'x' } },
+      setback: { available: true, value: { setbackFraction: 0.15, setbackDistanceMeters: 15.2, frontSetbackMeters: 15.2, sideSetbackMeters: 6.1, rearSetbackMeters: 9.1, intendedUse: 'commercial', samplePoints: 400 }, provenance: { source: 'Setback', sourceUrl: 'x' } },
     })
     const nd = computeNetDevelopable(SQUARE_BOUNDARY, overlays)
     expect(nd!.setbackAcres).toBeCloseTo(nd!.grossAcres * 0.15, 1)
@@ -292,7 +292,7 @@ describe('computeNetDevelopable', () => {
       slope: { available: true, value: { meanSlopePercent: 10, p90SlopePercent: 18, maxSlopePercent: 22, fractionOver15: 0.2, fractionOver20: 0.15, fractionOver30: 0, samplePoints: 25, spacingMeters: 40 }, provenance: { source: 'USGS', sourceUrl: 'x' } },
       soils: { available: true, value: { hydricFraction: 0.15, severeFraction: 0.15, moderateFraction: 0, dominantRating: 'severe', soilTypeCounts: {}, samplePoints: 400 }, provenance: { source: 'NRCS', sourceUrl: 'x' } },
       easements: { available: true, value: { easementFraction: 0.15, easementTypes: ['EASEMENT'], sourceLayer: 'test', samplePoints: 400 }, provenance: { source: 'Local GIS', sourceUrl: 'x' } },
-      setback: { available: true, value: { setbackFraction: 0.15, setbackDistanceMeters: 6.1, intendedUse: 'residential', samplePoints: 400 }, provenance: { source: 'Setback', sourceUrl: 'x' } },
+      setback: { available: true, value: { setbackFraction: 0.15, setbackDistanceMeters: 7.6, frontSetbackMeters: 7.6, sideSetbackMeters: 3.0, rearSetbackMeters: 7.6, intendedUse: 'residential', samplePoints: 400 }, provenance: { source: 'Setback', sourceUrl: 'x' } },
     })
     const nd = computeNetDevelopable(SQUARE_BOUNDARY, overlays)
     const expectedFraction = 1 - Math.pow(0.85, 6)
@@ -310,7 +310,10 @@ describe('computeSetbackOverlay', () => {
     const result = computeSetbackOverlay(boundary, 'residential')
     expect(result.available).toBe(true)
     expect(result.value!.setbackFraction).toBeGreaterThan(0)
-    expect(result.value!.setbackDistanceMeters).toBe(6.1) // 20 ft for residential
+    expect(result.value!.setbackDistanceMeters).toBe(7.6) // max of 25/10/25 ft for residential
+    expect(result.value!.frontSetbackMeters).toBe(7.6)   // 25 ft front
+    expect(result.value!.sideSetbackMeters).toBe(3.0)    // 10 ft side
+    expect(result.value!.rearSetbackMeters).toBe(7.6)    // 25 ft rear
     expect(result.value!.intendedUse).toBe('residential')
   })
 
