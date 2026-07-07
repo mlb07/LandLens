@@ -371,7 +371,7 @@ function App() {
     <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}>
       <main className="explorer-layout">
         <div className="map-column">
-          <MapExplorer key={activeStateCode} stateCode={activeStateCode} coordinates={coordinates} parcel={parcel} parcelLoading={parcelLoading} onSelect={selectCoordinates} onLocationLabel={setLocationLabel} />
+          <MapExplorer key={activeStateCode} stateCode={activeStateCode} coordinates={coordinates} parcel={parcel} parcelLoading={parcelLoading} overlays={overlays} onSelect={selectCoordinates} onLocationLabel={setLocationLabel} />
           <div className="map-site-strip">
             <div className="selected-coordinate-icon"><MapPin size={18} /></div>
             <div><span>Selected site</span><strong>{inputs.name || `Unnamed ${getStateDefinition(activeStateCode).name} location`}</strong><small className={`parcel-summary ${parcel?.status || 'loading'}`}>{parcelLoading ? 'Finding parcel boundary…' : parcel?.status === 'found' ? `${parcel.acres ? `${formatParcelAcres(parcel.acres)} acres · ` : ''}official parcel matched` : parcel?.message || 'Parcel boundary unavailable'}</small></div>

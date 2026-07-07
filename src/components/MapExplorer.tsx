@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Layers, LoaderCircle, LocateFixed, MapPin, ScanLine, Search, X } from 'lucide-react'
 import L from 'leaflet'
 import { GeoJSON, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet'
 import { findStateForPoint, getStateDefinition, getStateFeature, isPointInState } from '../data/states'
 import type { Coordinates, ParcelSelection } from '../types/site'
+import type { ParcelOverlayData } from '../data/parcelOverlayProvider'
 
 const markerIcon = L.divIcon({
   className: 'landlens-marker-wrap',
@@ -18,6 +19,30 @@ interface SearchResult {
 }
 
 type SelectLocation = (coordinates: Coordinates, stateCode: string) => void
+
+// Convert per-feature polygon rings (number[][][][] — array of multi-ring
+// polygons) to a GeoJSON FeatureCollection for Leaflet rendering.
+function multiRingsToGeoJSON(rings: number[][][][] | undefined): GeoJSON.FeatureCollection | null {
+  if (!rings || !rings.length) return null
+  const features: GeoJSON.Feature[] = rings.map((polygon) => ({
+    type: 'Feature' as const,
+    properties: {},
+    geometry: { type: 'Polygon' as const, coordinates: polygon },
+  }))
+  return { type: 'FeatureCollection', features }
+}
+
+// Convert flat single-ring array (number[][][] — array of single rings) to
+// a GeoJSON FeatureCollection.
+function flatRingsToGeoJSON(rings: number[][][] | undefined): GeoJSON.FeatureCollection | null {
+  if (!rings || !rings.length) return null
+  const features: GeoJSON.Feature[] = rings.map((ring) => ({
+    type: 'Feature' as const,
+    properties: {},
+    geometry: { type: 'Polygon' as const, coordinates: [ring] },
+  }))
+  return { type: 'FeatureCollection', features }
+}
 
 function MapEvents({ onSelect }: { onSelect: SelectLocation }) {
   useMapEvents({
@@ -85,11 +110,12 @@ function ParcelViewport({ parcel }: { parcel?: ParcelSelection }) {
   return null
 }
 
-export function MapExplorer({ stateCode, coordinates, parcel, parcelLoading, onSelect, onLocationLabel }: {
+export function MapExplorer({ stateCode, coordinates, parcel, parcelLoading, overlays, onSelect, onLocationLabel }: {
   stateCode: string
   coordinates: Coordinates
   parcel?: ParcelSelection
   parcelLoading: boolean
+  overlays?: ParcelOverlayData | null
   onSelect: SelectLocation
   onLocationLabel: (label: string) => void
 }) {
@@ -103,6 +129,15 @@ export function MapExplorer({ stateCode, coordinates, parcel, parcelLoading, onS
   const parcelFeature = parcel?.status === 'found' && parcel.boundary
     ? { type: 'Feature' as const, properties: {}, geometry: parcel.boundary }
     : null
+
+  // Memoize overlay GeoJSON data so react-leaflet doesn't re-render layers
+  // on every state tick. The data only changes when the overlay fetch
+  // completes with new polygon rings.
+  const floodwayGeo = useMemo(() => multiRingsToGeoJSON(overlays?.floodplain.value?.floodwayPolygons), [overlays?.floodplain.value?.floodwayPolygons])
+  const sfhaGeo = useMemo(() => multiRingsToGeoJSON(overlays?.floodplain.value?.sfhaPolygons), [overlays?.floodplain.value?.sfhaPolygons])
+  const wetlandsGeo = useMemo(() => multiRingsToGeoJSON(overlays?.wetlands.value?.polygons), [overlays?.wetlands.value?.polygons])
+  const habitatGeo = useMemo(() => flatRingsToGeoJSON(overlays?.species.value?.polygons), [overlays?.species.value?.polygons])
+
   const parcelStatusLabel = parcelLoading
     ? 'Finding parcel…'
     : parcel?.status === 'found'
@@ -185,6 +220,11 @@ export function MapExplorer({ stateCode, coordinates, parcel, parcelLoading, onS
         )}
         <GeoJSON key={stateCode} data={getStateFeature(stateCode)} style={{ color: '#176b4b', weight: 1.5, opacity: 0.7, fillColor: '#7caf95', fillOpacity: 0.05, dashArray: '5 5' }} interactive={false} />
         {parcelFeature && <GeoJSON key={parcel?.id || `${coordinates.lat}-${coordinates.lng}`} data={parcelFeature} style={{ color: '#d86b16', weight: 4, opacity: 1, fillColor: '#f59f45', fillOpacity: 0.22 }} interactive={false} />}
+        {/* Constraint polygon overlays — FEMA floodway (red), SFHA (blue), NWI wetlands (green), USFWS critical habitat (purple) */}
+        {floodwayGeo && <GeoJSON key="floodway" data={floodwayGeo} style={{ color: '#c92a2a', weight: 2, opacity: 0.9, fillColor: '#c92a2a', fillOpacity: 0.35 }} interactive={false} />}
+        {sfhaGeo && <GeoJSON key="sfha" data={sfhaGeo} style={{ color: '#1971c2', weight: 1, opacity: 0.7, fillColor: '#1971c2', fillOpacity: 0.15 }} interactive={false} />}
+        {wetlandsGeo && <GeoJSON key="wetlands" data={wetlandsGeo} style={{ color: '#2f9e44', weight: 1, opacity: 0.7, fillColor: '#2f9e44', fillOpacity: 0.3 }} interactive={false} />}
+        {habitatGeo && <GeoJSON key="habitat" data={habitatGeo} style={{ color: '#9c36b5', weight: 2, opacity: 0.9, fillColor: '#9c36b5', fillOpacity: 0.3 }} interactive={false} />}
         <Marker position={[coordinates.lat, coordinates.lng]} icon={markerIcon} draggable eventHandlers={{ dragend: (event) => { const point = event.target.getLatLng(); const next = { lat: point.lat, lng: point.lng }; const nextState = findStateForPoint(next); if (nextState) onSelect(next, nextState.code); else event.target.setLatLng(coordinates) } }}>
           <Tooltip permanent direction="top" offset={[0, -38]}>Selected site</Tooltip>
         </Marker>

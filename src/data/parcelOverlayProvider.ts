@@ -19,6 +19,8 @@ export interface FloodplainOverlay {
     zoneSummary: string          // e.g. "AE · X"
     risk: 'Low' | 'Moderate' | 'High' | 'Floodway' | 'Undetermined'
     samplePoints: number
+    floodwayPolygons?: number[][][][]  // per-feature rings for map rendering (floodway only)
+    sfhaPolygons?: number[][][][]      // per-feature rings for map rendering (non-floodway SFHA)
   }
   provenance: DataProvenance
   error?: string
@@ -30,6 +32,7 @@ export interface WetlandsOverlay {
     wetlandFraction: number      // 0–1 share of parcel with mapped wetlands/waters
     wetlandTypeCounts: Record<string, number>
     samplePoints: number
+    polygons?: number[][][][]    // per-feature rings for map rendering
   }
   provenance: DataProvenance
   error?: string
@@ -115,6 +118,7 @@ export interface SpeciesOverlay {
     speciesCount: number
     habitatFraction: number         // 0–1 share of the parcel grid inside critical habitat
     samplePoints: number
+    polygons?: number[][][]         // flat array of habitat rings for map rendering
   }
   provenance: DataProvenance
   error?: string
@@ -363,9 +367,14 @@ async function fetchFloodplainOverlay(boundary: GeoBoundary, gridPoints: { lng: 
     const zoneSummary = Array.from(zoneSet).sort().join(' · ')
     const risk = floodwayFraction > 0 ? 'Floodway' : sfhaFraction > 0.25 ? 'High' : sfhaFraction > 0 ? 'Moderate' : 'Low'
 
+    // Retain polygon rings for map rendering — split by floodway vs. SFHA
+    // so the map can render floodway in red and SFHA in blue.
+    const floodwayPolygons = floodPolygons.filter((fp) => fp.floodway).map((fp) => fp.polygon)
+    const sfhaPolygons = floodPolygons.filter((fp) => !fp.floodway && fp.sfha).map((fp) => fp.polygon)
+
     return {
       available: true,
-      value: { sfhaFraction, floodwayFraction, floodwayInCore, zoneSummary, risk, samplePoints: total },
+      value: { sfhaFraction, floodwayFraction, floodwayInCore, zoneSummary, risk, samplePoints: total, floodwayPolygons, sfhaPolygons },
       provenance: FEMA_PROVENANCE,
     }
   } catch (error) {
@@ -434,9 +443,12 @@ async function fetchWetlandsOverlay(boundary: GeoBoundary, gridPoints: { lng: nu
     const total = gridPoints.length
     const wetlandFraction = wetlandCount / total
 
+    // Retain polygon rings for map rendering.
+    const polygons = wetlandPolygons.map((wp) => wp.polygon)
+
     return {
       available: true,
-      value: { wetlandFraction, wetlandTypeCounts: typeCounts, samplePoints: total },
+      value: { wetlandFraction, wetlandTypeCounts: typeCounts, samplePoints: total, polygons },
       provenance: NWI_PROVENANCE,
     }
   } catch (error) {
@@ -1068,6 +1080,7 @@ async function fetchSpeciesOverlay(boundary: GeoBoundary, gridPoints: { lng: num
         speciesCount: features.length,
         habitatFraction: Math.round(habitatFraction * 1000) / 1000,
         samplePoints: gridPoints.length,
+        polygons: habitatPolygons,
       },
       provenance: SPECIES_OVERLAY_PROVENANCE,
     }
