@@ -215,6 +215,111 @@ const parcelAdapters: ParcelAdapter[] = [
   adapter('wisconsin-statewide-parcels', 'WI', 'https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/rest/services/Wisconsin_Statewide_Parcels/FeatureServer/0',
     { ids: ['STATEID', 'PARCELID', 'TAXPARCELID'], names: ['SITEADRESS_STAND', 'SITEADRESS', 'LANDMARKNAME'], assessorAcres: ['ASSDACRES', 'DEEDACRES'], mappedAcres: ['GISACRES'], vintage: ['TAXROLLYEAR', 'PARCELDATE', 'LOADDATE'] },
     source('Wisconsin Statewide Parcel Map Database V11', 'https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/rest/services/Wisconsin_Statewide_Parcels/FeatureServer/0', 'V11 / 2025 statewide parcel release', PARTIAL_STATE_NOTE)),
+
+  // ─── County-level and additional statewide adapters (Phases 13–14) ────
+
+  // Alabama — Mobile County (Mobile County Revenue Commission)
+  adapter('alabama-mobile-county-parcels', 'AL', 'https://services8.arcgis.com/HND1NcQt6vgOGn1z/arcgis/rest/services/MCRC_Public_Parcels/FeatureServer/0',
+    { ids: ['Parcel_Number', 'Account_Number', 'ParcelNo'], names: ['PropAddr1', 'PropCity'] },
+    source('Mobile County Revenue Commission public parcels', 'https://services8.arcgis.com/HND1NcQt6vgOGn1z/arcgis/rest/services/MCRC_Public_Parcels/FeatureServer/0', 'Live Mobile County parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 30.22, west: -88.42, north: 31.52, east: -87.42 } }),
+
+  // Georgia — DeKalb County (metro Atlanta)
+  adapter('georgia-dekalb-county-parcels', 'GA', 'https://services2.arcgis.com/IxVN2oUE9EYLSnPE/arcgis/rest/services/Tax_Parcels_2025/FeatureServer/0',
+    { ids: ['ParcelID'], names: [], assessorAcres: [], mappedAcres: ['CalculatedArea'] },
+    source('DeKalb County GIS tax parcels 2025', 'https://services2.arcgis.com/IxVN2oUE9EYLSnPE/arcgis/rest/services/Tax_Parcels_2025/FeatureServer/0', '2025 DeKalb County tax parcel release', PARTIAL_STATE_NOTE),
+    { bounds: { south: 33.55, west: -84.55, north: 34.35, east: -83.90 } }),
+
+  // Iowa — statewide (University of Iowa, 2017 compilation)
+  adapter('iowa-statewide-parcels-2017', 'IA', 'https://services3.arcgis.com/kd9gaiUExYqUbnoq/arcgis/rest/services/Iowa_Parcels_2017/FeatureServer/0',
+    { ids: ['STATEPARID', 'UNPARCELID', 'PARCELNUMB'], names: ['COUNTYNAME'] },
+    source('Iowa Statewide Parcel Data 2017 (University of Iowa)', 'https://services3.arcgis.com/kd9gaiUExYqUbnoq/arcgis/rest/services/Iowa_Parcels_2017/FeatureServer/0', '2017 statewide parcel compilation', PARTIAL_STATE_NOTE)),
+
+  // Illinois — Lake County
+  adapter('illinois-lake-county-parcels', 'IL', 'https://services3.arcgis.com/HESxeTbDliKKvec2/arcgis/rest/services/OpenData_ParcelPolygons/FeatureServer/0',
+    { ids: ['legdesc1', 'legdesc2'], names: [['situs_addr_line_1_First', 'situs_addr_city_First']] },
+    source('Lake County Illinois open data parcel polygons', 'https://services3.arcgis.com/HESxeTbDliKKvec2/arcgis/rest/services/OpenData_ParcelPolygons/FeatureServer/0', 'Live Lake County parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 42.20, west: -88.20, north: 42.85, east: -87.50 } }),
+
+  // Kentucky — Jefferson County (Louisville, via LOJIC)
+  adapter('kentucky-jefferson-county-parcels', 'KY', 'https://gis.lojic.org/maps/rest/services/LojicSolutions/OpenDataPVA/MapServer/1',
+    { ids: ['PARCELID', 'LRSN'], names: [] },
+    source('LOJIC / Jefferson County PVA open data parcels', 'https://gis.lojic.org/maps/rest/services/LojicSolutions/OpenDataPVA/MapServer/1', 'Live Louisville/Jefferson County parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 37.95, west: -85.95, north: 38.75, east: -85.40 } }),
+
+  // Louisiana — Baton Rouge (City-Parish)
+  adapter('louisiana-baton-rouge-parcels', 'LA', 'https://maps.brla.gov/gis/rest/services/Cadastral/Tax_Parcel/MapServer/0',
+    { ids: ['ASSESSMENT_NUM', 'PRONO'], names: ['PHYSICAL_ADDRESS', 'SUBDIVISION'] },
+    source('Baton Rouge City-Parish tax parcel service', 'https://maps.brla.gov/gis/rest/services/Cadastral/Tax_Parcel/MapServer/0', 'Live East Baton Rouge Parish parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 30.25, west: -91.35, north: 30.70, east: -90.90 } }),
+
+  // Maryland — statewide parcel boundaries (Maryland iMap / Dept of Planning)
+  adapter('maryland-statewide-parcel-boundaries', 'MD', 'https://mdgeodata.md.gov/imap/rest/services/PlanningCadastre/MD_ParcelBoundaries/MapServer/0',
+    { ids: ['ACCTID', 'JURSCODE'], names: [] },
+    source('Maryland iMap statewide parcel boundaries', 'https://mdgeodata.md.gov/imap/rest/services/PlanningCadastre/MD_ParcelBoundaries/MapServer/0', 'Live statewide Maryland parcel boundary service', PARTIAL_STATE_NOTE), { timeoutMs: 12_000 }),
+
+  // Michigan — Ottawa County
+  adapter('michigan-ottawa-county-parcels', 'MI', 'https://gis.miottawa.org/arcgis/rest/services/HostedServices/ParcelsPublic/MapServer/0',
+    { ids: ['FinalPIN', 'ParentPIN', 'CondoPIN'], names: [['AddressNumber', 'AddressStreet']] },
+    source('Ottawa County Michigan public parcels', 'https://gis.miottawa.org/arcgis/rest/services/HostedServices/ParcelsPublic/MapServer/0', 'Live Ottawa County parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 42.70, west: -86.50, north: 43.35, east: -85.90 } }),
+
+  // Missouri — Kansas City
+  adapter('missouri-kansas-city-parcels', 'MO', 'https://mapd.kcmo.org/kcgis/rest/services/AGOL/MapServer/6',
+    { ids: ['KIVAPIN', 'APN'], names: ['PLATNAME'] },
+    source('Kansas City Missouri GIS parcel layer', 'https://mapd.kcmo.org/kcgis/rest/services/AGOL/MapServer/6', 'Live Kansas City parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 38.80, west: -94.73, north: 39.40, east: -94.30 } }),
+
+  // New Mexico — Doña Ana County (Las Cruces area)
+  adapter('new-mexico-dona-ana-county-parcels', 'NM', 'https://services7.arcgis.com/JMIoqakAkedEx0oU/arcgis/rest/services/DAC_Parcels/FeatureServer/0',
+    { ids: ['ACCOUNTNUMBER', 'PARCELNUMBER', 'MAP_CODE'], names: [], mappedAcres: [] },
+    source('Doña Ana County Assessor public parcels', 'https://services7.arcgis.com/JMIoqakAkedEx0oU/arcgis/rest/services/DAC_Parcels/FeatureServer/0', 'Live Doña Ana County parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 31.30, west: -107.10, north: 32.45, east: -106.30 } }),
+
+  // Oklahoma — Canadian County (OKC metro)
+  adapter('oklahoma-canadian-county-parcels', 'OK', 'https://services2.arcgis.com/0NjdXxmJp53hZWPd/arcgis/rest/services/ParcelDataService_2_view/FeatureServer/0',
+    { ids: ['subdivision_name', 'subdivision_number'], names: [], assessorAcres: ['acres'] },
+    source('Canadian County Oklahoma public parcel data', 'https://services2.arcgis.com/0NjdXxmJp53hZWPd/arcgis/rest/services/ParcelDataService_2_view/FeatureServer/0', 'Live Canadian County parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 35.30, west: -98.20, north: 35.90, east: -97.50 } }),
+
+  // Oregon — statewide taxlots (Oregon Department of Forestry)
+  adapter('oregon-statewide-taxlots', 'OR', 'https://gis.odf.oregon.gov/ags1/rest/services/WebMercator/TaxlotsDisplay/MapServer/0',
+    { ids: ['County', 'Town', 'Range'], names: ['TownPart'] },
+    source('Oregon Department of Forestry statewide taxlot display', 'https://gis.odf.oregon.gov/ags1/rest/services/WebMercator/TaxlotsDisplay/MapServer/0', 'Live statewide Oregon taxlot service', PARTIAL_STATE_NOTE), { timeoutMs: 12_000 }),
+
+  // Pennsylvania — Chester County
+  adapter('pennsylvania-chester-county-parcels', 'PA', 'https://services.arcgis.com/G4S1dGvn7PIgYd6Y/arcgis/rest/services/Parcels_owners/FeatureServer/0',
+    { ids: ['UPI', 'PIN_MAP', 'PIN_COMMON', 'PIN_ASMNT'], names: [], assessorAcres: ['ACRE_PLAN_TOT'] },
+    source('Chester County Pennsylvania parcel data', 'https://services.arcgis.com/G4S1dGvn7PIgYd6Y/arcgis/rest/services/Parcels_owners/FeatureServer/0', 'Live Chester County parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 39.75, west: -76.05, north: 40.25, east: -75.30 } }),
+
+  // Pennsylvania — York County
+  adapter('pennsylvania-york-county-parcels', 'PA', 'https://arcweb1.ycpc.org/server/rest/services/OPEN_DATA/Parcels/MapServer/0',
+    { ids: ['PIDN', 'PARCEL', 'PARCEL_MAJOR', 'PARCEL_MINOR'], names: ['DISTRICT', 'BLOCK'] },
+    source('York County Pennsylvania Planning Commission parcels', 'https://arcweb1.ycpc.org/server/rest/services/OPEN_DATA/Parcels/MapServer/0', 'Live York County parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 39.70, west: -77.30, north: 40.20, east: -76.50 } }),
+
+  // Rhode Island — statewide tax parcels (RIGIS)
+  adapter('rhode-island-statewide-tax-parcels', 'RI', 'https://risegis.ri.gov/hosting/rest/services/RIDEM/Tax_Parcels/MapServer/0',
+    { ids: ['PlatLot'], names: ['E911'], assessorAcres: ['Acres'] },
+    source('Rhode Island Geographic Information System (RIGIS) tax parcels', 'https://risegis.ri.gov/hosting/rest/services/RIDEM/Tax_Parcels/MapServer/0', 'Live statewide Rhode Island tax parcel service')),
+
+  // South Carolina — York County
+  adapter('south-carolina-york-county-parcels', 'SC', 'https://services1.arcgis.com/2AGLxyiJoNiVHKwq/arcgis/rest/services/Parcels/FeatureServer/0',
+    { ids: ['TAXMAPID', 'ParcelID', 'AprAccNum'], names: ['MailAddr1'] },
+    source('York County South Carolina public parcels', 'https://services1.arcgis.com/2AGLxyiJoNiVHKwq/arcgis/rest/services/Parcels/FeatureServer/0', 'Live York County SC parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 34.80, west: -81.65, north: 35.20, east: -80.80 } }),
+
+  // South Dakota — Minnehaha County (Sioux Falls area)
+  adapter('south-dakota-minnehaha-county-parcels', 'SD', 'https://gis.minnehahacounty.gov/minnemap/rest/services/Parcels/MapServer/0',
+    { ids: ['TAG', 'MAP_ID', 'MRRDID'], names: ['FULL_ADDRESS'] },
+    source('Minnehaha County South Dakota parcel service', 'https://gis.minnehahacounty.gov/minnemap/rest/services/Parcels/MapServer/0', 'Live Minnehaha County parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 43.20, west: -96.90, north: 43.90, east: -96.30 } }),
+
+  // Wyoming — statewide parcels (Wyoming State Lands / OSLISDE)
+  adapter('wyoming-statewide-parcels-2025', 'WY', 'https://gis2.statelands.wyo.gov/arcgis/rest/services/oslisde/Parcels2025/MapServer/0',
+    { ids: ['parcelnb', 'accountno'], names: ['jurisdicti', 'ownername1'] },
+    source('Wyoming State Lands and Investments Board 2025 parcels', 'https://gis2.statelands.wyo.gov/arcgis/rest/services/oslisde/Parcels2025/MapServer/0', '2025 statewide Wyoming parcel service', PARTIAL_STATE_NOTE), { timeoutMs: 12_000 }),
 ]
 
 const parcelCache = new Map<string, { result: ParcelSelection; expiresAt: number }>()
