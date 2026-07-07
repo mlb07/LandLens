@@ -123,6 +123,14 @@ const parcelAdapters: ParcelAdapter[] = [
     { bounds: { south: 32.49, west: -97.61, north: 33.06, east: -97.0 } },
   ),
 
+  // Arizona — Maricopa County (Phoenix metro). Arizona does not publish a
+  // statewide parcel service; Maricopa County is the state's largest county
+  // and covers the Phoenix metropolitan area.
+  adapter('arizona-maricopa-county-parcels', 'AZ', 'https://gis.maricopa.gov/arcgis/rest/services/IndividualService/Parcel/MapServer/1',
+    { ids: ['APN', 'APNDash'], names: ['PropertyFullStreetAddress'] },
+    source('Maricopa County Assessor parcel layer', 'https://gis.maricopa.gov/arcgis/rest/services/IndividualService/Parcel/MapServer/1', 'Live Maricopa County parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 32.70, west: -113.80, north: 34.05, east: -111.15 } }),
+
   adapter('alaska-statewide-parcels', 'AK', 'https://services1.arcgis.com/7HDiw78fcUiM2BWn/arcgis/rest/services/AK_Parcels/FeatureServer/0',
     { ids: ['parcel_id', 'feature_id'], names: [] },
     source('Alaska Statewide Parcels', 'https://services1.arcgis.com/7HDiw78fcUiM2BWn/arcgis/rest/services/AK_Parcels/FeatureServer/0', 'Live public statewide compilation', PARTIAL_STATE_NOTE)),
@@ -162,6 +170,9 @@ const parcelAdapters: ParcelAdapter[] = [
   adapter('montana-cadastral-framework', 'MT', 'https://services.arcgis.com/qnjIrwR8z5Izc0ij/arcgis/rest/services/Montana_Cadastral_Framework/FeatureServer/1',
     { ids: ['PARCELID', 'PropertyID', 'AssessmentCode'], names: ['AddressLine1', 'Subdivision'], assessorAcres: ['TotalAcres'], mappedAcres: ['GISAcres'], vintage: ['TaxYear'] },
     source('Montana State Library Cadastral Framework', 'https://services.arcgis.com/qnjIrwR8z5Izc0ij/arcgis/rest/services/Montana_Cadastral_Framework/FeatureServer/1', 'Live Montana cadastral service')),
+  adapter('nevada-statewide-parcels', 'NV', 'https://arcgis.water.nv.gov/arcgis/rest/services/BaseLayers/County_Parcels_in_Nevada/MapServer/0',
+    { ids: ['APN', 'PIN'], names: ['SiteCity'], assessorAcres: ['Acres'], vintage: ['SourceDate'] },
+    source('Nevada Division of Water Resources county parcel compilation', 'https://arcgis.water.nv.gov/arcgis/rest/services/BaseLayers/County_Parcels_in_Nevada/MapServer/0', 'Statewide county parcel compilation', PARTIAL_STATE_NOTE), { timeoutMs: 12_000 }),
   adapter('nebraska-statewide-parcels', 'NE', 'https://gis.ne.gov/Enterprise/rest/services/StatewideParcelsExternal/FeatureServer/0',
     { ids: ['State_PID', 'Parcel_ID'], names: ['Situs_Address', 'Subdivision'], assessorAcres: ['Acres_Deeded'], mappedAcres: ['GIS_Acres'], vintage: ['CAMAUpdate', 'ShapeUpdate'] },
     source('Nebraska Statewide Parcels', 'https://gis.ne.gov/Enterprise/rest/services/StatewideParcelsExternal/FeatureServer/0', 'Annual Nebraska county assessor compilation', PARTIAL_STATE_NOTE), { timeoutMs: 12_000 }),
@@ -189,6 +200,9 @@ const parcelAdapters: ParcelAdapter[] = [
   adapter('utah-statewide-parcels', 'UT', 'https://services1.arcgis.com/99lidPhWCzftIe9K/arcgis/rest/services/UtahStatewideParcels/FeatureServer/0',
     { ids: ['PARCEL_ID', 'ACCOUNT_NUM'], names: [['PARCEL_ADD', 'PARCEL_CITY']] },
     source('Utah AGRC Statewide Parcels', 'https://services1.arcgis.com/99lidPhWCzftIe9K/arcgis/rest/services/UtahStatewideParcels/FeatureServer/0', 'Live Utah county parcel compilation', PARTIAL_STATE_NOTE)),
+  adapter('virginia-vgin-parcels', 'VA', 'https://vginmaps.vdem.virginia.gov/arcgis/rest/services/VA_Base_Layers/VA_Parcels/FeatureServer',
+    { ids: ['PARCELID', 'PTM_ID', 'VGIN_QPID'], names: ['LOCALITY'], vintage: ['LASTUPDATE'] },
+    source('Virginia Geographic Information Network (VGIN) statewide parcels', 'https://vginmaps.vdem.virginia.gov/arcgis/rest/services/VA_Base_Layers/VA_Parcels/FeatureServer', 'Live VGIN statewide parcel service', PARTIAL_STATE_NOTE), { timeoutMs: 12_000 }),
   adapter('vermont-standardized-parcels', 'VT', 'https://services1.arcgis.com/BkFxaEFNwHqX3tAw/arcgis/rest/services/FS_VCGI_OPENDATA_Cadastral_VTPARCELS_poly_standardized_parcels_SP_v1/FeatureServer/0',
     { ids: ['SPAN', 'PARCID', 'MAPID'], names: ['E911ADDR', 'LOCAPROP'], assessorAcres: ['ACRESGL'], vintage: ['YEAR', 'SOURCEDATE', 'EDITDATE'] },
     source('Vermont VCGI Standardized Parcel Data', 'https://services1.arcgis.com/BkFxaEFNwHqX3tAw/arcgis/rest/services/FS_VCGI_OPENDATA_Cadastral_VTPARCELS_poly_standardized_parcels_SP_v1/FeatureServer/0', 'Live statewide Vermont standardized parcels', PARTIAL_STATE_NOTE)),
