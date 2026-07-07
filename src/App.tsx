@@ -7,7 +7,7 @@ import { SiteForm } from './components/SiteForm'
 import { SiteReport } from './components/SiteReport'
 import { fetchOfficialSiteData, type OfficialSiteData } from './data/officialDataProvider'
 import { fetchParcelAt, formatParcelAcres } from './data/parcelProvider'
-import { fetchParcelOverlays, type ParcelOverlayData } from './data/parcelOverlayProvider'
+import { fetchParcelOverlays, computeSetbackOverlay, type ParcelOverlayData } from './data/parcelOverlayProvider'
 import { fetchRegionalHazards, type RegionalHazardData } from './data/regionalHazardProvider'
 import { registerDefaultLocalAdapters } from './data/localAdapters'
 import { getStateDefinition, stateDefinitions } from './data/states'
@@ -166,6 +166,18 @@ function App() {
       controller.abort()
     }
   }, [coordinates, parcelBoundary, activeStateCode])
+
+  // Recompute the setback overlay when intended use changes (pure geometry, no network).
+  // The setback distance depends on inputs.intendedUse; all other overlays are
+  // network-fetched and stay cached when only the intended use changes.
+  useEffect(() => {
+    if (!parcelBoundary || !overlaysRef.current) return
+    const setback = computeSetbackOverlay(parcelBoundary, inputs.intendedUse)
+    const updated = { ...overlaysRef.current, setback }
+    overlaysRef.current = updated
+    setOverlays(updated)
+    setAnalysis(analyzeSite(coordinates, inputsRef.current, officialDataRef.current, true, updated, hazardsRef.current))
+  }, [inputs.intendedUse, parcelBoundary, coordinates])
 
   // Fetch regional hazards (sea-level rise, wildfire, radon) alongside official data.
   useEffect(() => {

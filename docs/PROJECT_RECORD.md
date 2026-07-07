@@ -182,7 +182,7 @@ The official-data provider, scoring layer, and parcel-provider interface are sep
 
 ## Recommended next backlog
 
-1. ~~Run FEMA, wetlands, terrain, setbacks, and easement overlays across the loaded parcel to calculate net buildable acreage.~~ **Done for FEMA/NWI/slope (Phase 3). Hydric/severe soils and recorded easements added (Phase 8). Setbacks and buffers still need local GIS adapters / jurisdiction-specific ordinance wiring.**
+1. ~~Run FEMA, wetlands, terrain, setbacks, and easement overlays across the loaded parcel to calculate net buildable acreage.~~ **Done for FEMA/NWI/slope (Phase 3). Hydric/severe soils and recorded easements added (Phase 8). Perimeter setbacks added (Phase 12). All six land-use constraints are now subtracted from net developable acreage.**
 2. Add a backend cache/proxy for public services, rate limiting, monitoring, and credentials. This would resolve CORS limitations for USDA SDA, EPA FRS, USFWS ECOS, NOAA SLR, USFS WHP, and EPA radon.
 3. Add USDA SSURGO ~~soils and~~ subtract hydric/severe soils from net developable acreage. ~~A net-buildable-acre calculation that subtracts floodway, wetlands, steep slope, setbacks, and easements.~~ **Done (Phase 8): parcel-wide soil overlay and hydric/severe subtraction are wired; moderate soils are not subtracted at the screening stage.**
 4. ~~Add EPA Envirofacts / UST Finder for contamination screening and USFWS IPaC / ECOS for species/historic screening.~~ **Done (Phase 4).**
@@ -193,9 +193,20 @@ The official-data provider, scoring layer, and parcel-provider interface are sep
 9. Register local easement/ROW adapters for high-priority jurisdictions (e.g. major Texas counties, Florida, California). **Travis County, TX easement adapter registered (Phase 8). All eight verified Texas county parcel layers — Travis, Dallas, Harris, Bexar, Collin, Williamson, Montgomery, Tarrant — now have easement adapters registered (Phase 9).**
 10. ~~Add parcel-wide soils and stormwater overlays to complement the existing FEMA/NWI/slope parcel overlays.~~ **Done (Phase 8).**
 11. ~~Parcel-wide contamination and species overlays (EPA FRS buffer + USFWS critical habitat intersection across the parcel grid).~~ **Done (Phase 9).**
-12. Jurisdiction-specific setback overlays for the net developable acreage calculation (setbacks are still explicitly NOT subtracted).
+12. ~~Jurisdiction-specific setback overlays for the net developable acreage calculation (setbacks are still explicitly NOT subtracted).~~ **Done (Phase 12): perimeter setback overlay uses conservative US-default distances by intended use (residential 20 ft, mixed-use 25 ft, commercial 30 ft, industrial 40 ft, other 20 ft). Distances are screening defaults — local zoning ordinances may differ. Front/side/rear distinction is not yet wired (requires road-context analysis).**
 
 ## Change log
+
+### 2026-07-06 — Perimeter setback overlay; 6-factor net developable acreage (Phase 12)
+
+- **Setback overlay:** added `SetbackOverlay` and `computeSetbackOverlay` in `parcelOverlayProvider.ts`. For each of the 400 parcel grid points, computes the distance to the nearest parcel boundary edge using `pointToBoundaryDistanceMeters` (new in `geometry.ts`, using haversine + point-to-segment projection). Points within the setback distance are "setback-constrained" and subtracted from net developable acreage.
+- **Intended-use-aware setback distances:** conservative US-default uniform perimeter setback by intended use — residential 20 ft (6.1 m), mixed-use 25 ft (7.6 m), commercial 30 ft (9.1 m), industrial 40 ft (12.2 m), other 20 ft (6.1 m). These are screening defaults, not jurisdiction-specific ordinances. Front/side/rear distinction is not yet wired (would require road-context analysis to determine which boundary edge faces the road). The provenance makes the "verify with local zoning ordinance" caveat explicit.
+- **Instant recompute on intended-use change:** the setback overlay is pure geometry (no network calls). A separate `useEffect` in `App.tsx` recomputes only the setback when the user changes the intended-use dropdown, without re-fetching FEMA/NWI/USGS/EPA overlays. The other overlays stay cached.
+- **6-factor net developable acreage:** `computeNetDevelopable` now subtracts the union of floodway + wetlands + steep slope + hydric/severe soils + mapped easements + perimeter setbacks using the independence approximation `1-(1-a)(1-b)(1-c)(1-d)(1-e)(1-f)`. `NetDevelopableOverlay` extended with `setbackAcres`. The score detail, provenance `coverageNote`, and the ScorePanel "parcel-wide overlays active" note all mention setbacks explicitly. The previous "Does not subtract setbacks" caveat has been removed.
+- **Geometry:** added `pointToSegmentMeters` and `pointToBoundaryDistanceMeters` to `geometry.ts` using haversine distance and standard point-to-segment projection. These are pure functions with no external dependencies.
+- **Tests:** `npm run test` now 88 tests (was 84). Added 4 cases: setback subtraction from net developable, 6-factor independence approximation math (`1-(0.85)^6 ≈ 0.6228`), `computeSetbackOverlay` returns nonzero fraction for a real parcel, and industrial intended use uses a larger setback distance than residential. Updated existing test fixtures with `setback` + `setbackAcres` fields.
+- **Docs:** backlog #1 and #12 marked Done. README MVP capabilities bullet expanded to include perimeter setbacks.
+- Verified `npm run test`, `npm run lint`, `npm run build`, and `tsc -b` all pass. Build is ~636 kB (~194 kB gzipped) — no new runtime dependencies.
 
 ### 2026-07-06 — Provider contract tests for parcel overlay compute functions (Phase 11)
 

@@ -1,5 +1,5 @@
-import type { DataProvenance, ScreeningArea } from '../types/site'
-import { boundaryAreaSquareMeters, boundaryToArcGISPolygon, gridSampleBoundary, pointInBoundary, squareMetersToAcres, type GeoBoundary } from '../lib/geometry'
+import type { DataProvenance, IntendedUse, ScreeningArea } from '../types/site'
+import { boundaryAreaSquareMeters, boundaryToArcGISPolygon, gridSampleBoundary, pointInBoundary, pointToBoundaryDistanceMeters, squareMetersToAcres, type GeoBoundary } from '../lib/geometry'
 import { fetchEasementsOverlayForParcel } from './localAdapters'
 
 // Accept the ScreeningArea boundary shape (which has a union type) and narrow
@@ -120,6 +120,18 @@ export interface SpeciesOverlay {
   error?: string
 }
 
+export interface SetbackOverlay {
+  available: boolean
+  value?: {
+    setbackFraction: number          // 0–1 share of parcel grid within the setback ring
+    setbackDistanceMeters: number    // the uniform perimeter setback used
+    intendedUse: string              // the intended use that drove the distance
+    samplePoints: number
+  }
+  provenance: DataProvenance
+  error?: string
+}
+
 export interface NetDevelopableOverlay {
   grossAcres: number
   floodwayAcres: number
@@ -127,7 +139,8 @@ export interface NetDevelopableOverlay {
   steepSlopeAcres: number       // slope > 20%
   soilConstrainedAcres: number  // hydric or severe soil fraction
   easementAcres: number          // mapped easements/ROW
-  constrainedAcres: number       // union of all five constraints
+  setbackAcres: number           // perimeter setback ring
+  constrainedAcres: number       // union of all six constraints
   netDevelopableAcres: number
   netToGrossRatio: number        // 0–1
   samplePoints: number
@@ -142,11 +155,12 @@ export interface ParcelOverlayData {
   easements: EasementsOverlay
   contamination: ContaminationOverlay
   species: SpeciesOverlay
+  setback: SetbackOverlay
   netDevelopable: NetDevelopableOverlay | null
   fetchedAt: string
 }
 
-export type ParcelOverlayCategory = 'floodplain' | 'wetlands' | 'slope' | 'soils' | 'stormwater' | 'easements' | 'contamination' | 'species' | 'netDevelopable'
+export type ParcelOverlayCategory = 'floodplain' | 'wetlands' | 'slope' | 'soils' | 'stormwater' | 'easements' | 'contamination' | 'species' | 'setback' | 'netDevelopable'
 
 export interface ParcelOverlayProgress {
   data: ParcelOverlayData
@@ -209,6 +223,13 @@ const SPECIES_OVERLAY_PROVENANCE: DataProvenance = {
   sourceUrl: 'https://ipac.sciencefws.gov/',
   vintage: 'Live ECOS critical habitat service',
   coverageNote: 'Parcel-wide intersection of USFWS critical habitat polygons. IPaC\u2019s standard resource list is informational and not official consultation correspondence. A formal IPaC project review and agency consultation are still required when a federal nexus exists.',
+}
+
+const SETBACK_PROVENANCE: DataProvenance = {
+  source: 'Perimeter setback overlay (screening defaults)',
+  sourceUrl: '',
+  vintage: 'Conservative US-default setback distances by intended use',
+  coverageNote: 'Uniform perimeter setback applied to the parcel boundary using conservative US-default distances by intended use (residential 20 ft, mixed-use 25 ft, commercial 30 ft, industrial 40 ft, other 20 ft). These are screening defaults, not jurisdiction-specific ordinances. Local zoning codes, plat notes, and HOA covenants may require larger setbacks or different front/side/rear distances. Verify with the local planning department before design.',
 }
 
 // ─── Network helper ─────────────────────────────────────────────────────
@@ -1056,6 +1077,62 @@ async function fetchSpeciesOverlay(boundary: GeoBoundary, gridPoints: { lng: num
   }
 }
 
+// ─── Setback overlay (perimeter setback, intended-use-aware) ────────────
+//
+// Applies a uniform perimeter setback to the parcel boundary using
+// conservative US-default distances by intended use. For each of the 400
+// parcel grid points, computes the distance to the nearest boundary edge;
+// points within the setback distance are "setback-constrained" and subtracted
+// from net developable acreage.
+//
+// These are screening defaults, not jurisdiction-specific ordinances. Local
+// zoning codes, plat notes, and HOA covenants may require larger setbacks or
+// different front/side/rear distances. The provenance makes this explicit.
+// Front vs. side vs. rear distinction would require road-context analysis
+// (which edge faces the road) — not yet wired. The uniform distance is the
+// max of typical front/side/rear for the use, which is conservative.
+
+const SETBACK_DISTANCES_METERS: Record<IntendedUse, number> = {
+  residential: 6.1,   // 20 ft
+  'mixed-use': 7.6,    // 25 ft
+  commercial: 9.1,     // 30 ft
+  industrial: 12.2,    // 40 ft
+  other: 6.1,          // 20 ft
+}
+
+export function computeSetbackOverlay(
+  boundaryInput: NonNullable<ScreeningArea['boundary']>,
+  intendedUse: IntendedUse,
+): SetbackOverlay {
+  try {
+    const boundary = narrowBoundary(boundaryInput)
+    const { points: gridPoints } = gridSampleBoundary(boundary, 400)
+    if (!gridPoints.length) {
+      return { available: false, provenance: SETBACK_PROVENANCE, error: 'No grid points inside the parcel boundary.' }
+    }
+    const setbackMeters = SETBACK_DISTANCES_METERS[intendedUse] ?? SETBACK_DISTANCES_METERS.other
+    let constrainedCount = 0
+    for (const pt of gridPoints) {
+      const dist = pointToBoundaryDistanceMeters(pt.lng, pt.lat, boundary)
+      if (dist < setbackMeters) constrainedCount += 1
+    }
+    const setbackFraction = gridPoints.length ? constrainedCount / gridPoints.length : 0
+    return {
+      available: true,
+      value: {
+        setbackFraction: Math.round(setbackFraction * 1000) / 1000,
+        setbackDistanceMeters: setbackMeters,
+        intendedUse,
+        samplePoints: gridPoints.length,
+      },
+      provenance: SETBACK_PROVENANCE,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { available: false, provenance: SETBACK_PROVENANCE, error: message }
+  }
+}
+
 // ─── Net developable acreage ────────────────────────────────────────────
 
 export function computeNetDevelopable(
@@ -1079,22 +1156,24 @@ export function computeNetDevelopable(
     overlays.soils.value?.severeFraction ?? 0,
   )
   const easementFraction = overlays.easements.value?.easementFraction ?? 0
+  const setbackFraction = overlays.setback.value?.setbackFraction ?? 0
 
   // Grid-based union: each constraint is measured against the same grid, so
   // the true union requires checking each point against all constraints. Since
   // we computed fractions independently, we use the independence approximation
-  // for the union: 1 - (1-a)(1-b)(1-c)(1-d)(1-e). This slightly overestimates
-  // overlap but is conservative (overcounts constrained land) which is safer
-  // for screening.
+  // for the union: 1 - (1-a)(1-b)(1-c)(1-d)(1-e)(1-f). This slightly
+  // overestimates overlap but is conservative (overcounts constrained land)
+  // which is safer for screening.
   const constrainedFraction =
     1 - (1 - floodwayFraction) * (1 - wetlandFraction) * (1 - steepFraction)
-          * (1 - soilFraction) * (1 - easementFraction)
+          * (1 - soilFraction) * (1 - easementFraction) * (1 - setbackFraction)
 
   const floodwayAcres = grossAcres * floodwayFraction
   const wetlandAcres = grossAcres * wetlandFraction
   const steepSlopeAcres = grossAcres * steepFraction
   const soilConstrainedAcres = grossAcres * soilFraction
   const easementAcres = grossAcres * easementFraction
+  const setbackAcres = grossAcres * setbackFraction
   const constrainedAcres = grossAcres * constrainedFraction
   const netDevelopableAcres = Math.max(0, grossAcres - constrainedAcres)
   const netToGrossRatio = grossAcres > 0 ? netDevelopableAcres / grossAcres : 0
@@ -1106,6 +1185,7 @@ export function computeNetDevelopable(
     steepSlopeAcres: Math.round(steepSlopeAcres * 100) / 100,
     soilConstrainedAcres: Math.round(soilConstrainedAcres * 100) / 100,
     easementAcres: Math.round(easementAcres * 100) / 100,
+    setbackAcres: Math.round(setbackAcres * 100) / 100,
     constrainedAcres: Math.round(constrainedAcres * 100) / 100,
     netDevelopableAcres: Math.round(netDevelopableAcres * 100) / 100,
     netToGrossRatio: Math.round(netToGrossRatio * 1000) / 1000,
@@ -1115,6 +1195,7 @@ export function computeNetDevelopable(
       ?? overlays.slope.value?.samplePoints
       ?? overlays.soils.value?.samplePoints
       ?? overlays.easements.value?.samplePoints
+      ?? overlays.setback.value?.samplePoints
       ?? 0,
   }
 }
@@ -1140,10 +1221,11 @@ export async function fetchParcelOverlays(
     easements: { available: false, provenance: EASEMENTS_OVERLAY_PROVENANCE, error: 'Pending' },
     contamination: { available: false, provenance: CONTAMINATION_OVERLAY_PROVENANCE, error: 'Pending' },
     species: { available: false, provenance: SPECIES_OVERLAY_PROVENANCE, error: 'Pending' },
+    setback: { available: false, provenance: SETBACK_PROVENANCE, error: 'Pending' },
     netDevelopable: null,
     fetchedAt: new Date().toISOString(),
   }
-  const remaining = new Set<ParcelOverlayCategory>(['floodplain', 'wetlands', 'slope', 'soils', 'stormwater', 'easements', 'contamination', 'species'])
+  const remaining = new Set<ParcelOverlayCategory>(['floodplain', 'wetlands', 'slope', 'soils', 'stormwater', 'easements', 'contamination', 'species', 'setback'])
 
   function publish(category: ParcelOverlayCategory, observation: ParcelOverlayData[ParcelOverlayCategory]) {
     data = { ...data, [category]: observation, fetchedAt: new Date().toISOString() }
@@ -1184,6 +1266,8 @@ export async function fetchParcelOverlays(
     })(),
     fetchContaminationOverlay(boundary, gridPoints, signal).then((v) => publish('contamination', v)),
     fetchSpeciesOverlay(boundary, gridPoints, signal).then((v) => publish('species', v)),
+    // Setback is pure geometry (no network) — resolves instantly.
+    Promise.resolve(publish('setback', computeSetbackOverlay(boundaryInput, 'residential'))),
   ])
 
   // Final net developable computation.

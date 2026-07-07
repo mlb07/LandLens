@@ -4,6 +4,7 @@ import {
   computeStormwaterFromElevations,
   computeEasementsOverlayFromAdapter,
   computeNetDevelopable,
+  computeSetbackOverlay,
   ringsToWkt,
   buildEasementsOverlay,
   type SharedElevations,
@@ -197,6 +198,7 @@ describe('computeNetDevelopable', () => {
       easements: { available: true, value: { easementFraction: 0, easementTypes: [], sourceLayer: 'test', samplePoints: 400 }, provenance: { source: 'Local GIS', sourceUrl: 'x' } },
       contamination: { available: true, value: { facilityCount: 0, hasMajorFlag: false, facilityTypes: [], nearestName: '', bufferMeters: 100, samplePoints: 400 }, provenance: { source: 'EPA FRS', sourceUrl: 'x' } },
       species: { available: true, value: { criticalHabitatHit: false, criticalHabitatLayers: [], speciesCount: 0, habitatFraction: 0, samplePoints: 400 }, provenance: { source: 'USFWS ECOS', sourceUrl: 'x' } },
+      setback: { available: true, value: { setbackFraction: 0, setbackDistanceMeters: 6.1, intendedUse: 'residential', samplePoints: 400 }, provenance: { source: 'Setback', sourceUrl: 'x' } },
       netDevelopable: null,
       fetchedAt: new Date().toISOString(),
       ...overrides,
@@ -261,7 +263,7 @@ describe('computeNetDevelopable', () => {
 
   it('does not subtract contamination or critical habitat from net developable', () => {
     // Even with a major contamination flag + 50% critical habitat coverage,
-    // the constrained acres should only reflect the 5 land-use constraints
+    // the constrained acres should only reflect the 6 land-use constraints
     // (here all zero), not the gates.
     const overlays = makeOverlays({
       contamination: { available: true, value: { facilityCount: 3, hasMajorFlag: true, facilityTypes: ['RCRA'], nearestName: 'Acme', bufferMeters: 100, samplePoints: 400 }, provenance: { source: 'EPA FRS', sourceUrl: 'x' } },
@@ -270,5 +272,52 @@ describe('computeNetDevelopable', () => {
     const nd = computeNetDevelopable(SQUARE_BOUNDARY, overlays)
     expect(nd!.constrainedAcres).toBe(0)
     expect(nd!.netToGrossRatio).toBe(1)
+  })
+
+  it('subtracts setback fraction from net developable', () => {
+    const overlays = makeOverlays({
+      setback: { available: true, value: { setbackFraction: 0.15, setbackDistanceMeters: 9.1, intendedUse: 'commercial', samplePoints: 400 }, provenance: { source: 'Setback', sourceUrl: 'x' } },
+    })
+    const nd = computeNetDevelopable(SQUARE_BOUNDARY, overlays)
+    expect(nd!.setbackAcres).toBeCloseTo(nd!.grossAcres * 0.15, 1)
+    expect(nd!.netToGrossRatio).toBeLessThan(1)
+  })
+
+  it('applies the 6-factor independence approximation for the union including setbacks', () => {
+    // Set every constraint including setback to 0.15.
+    // Independence approximation: 1 - (1-0.15)^6 = 1 - 0.85^6 ≈ 0.6228
+    const overlays = makeOverlays({
+      floodplain: { available: true, value: { sfhaFraction: 0, floodwayFraction: 0.15, floodwayInCore: true, zoneSummary: 'AE', risk: 'Floodway', samplePoints: 400 }, provenance: { source: 'FEMA', sourceUrl: 'x' } },
+      wetlands: { available: true, value: { wetlandFraction: 0.15, wetlandTypeCounts: {}, samplePoints: 400 }, provenance: { source: 'NWI', sourceUrl: 'x' } },
+      slope: { available: true, value: { meanSlopePercent: 10, p90SlopePercent: 18, maxSlopePercent: 22, fractionOver15: 0.2, fractionOver20: 0.15, fractionOver30: 0, samplePoints: 25, spacingMeters: 40 }, provenance: { source: 'USGS', sourceUrl: 'x' } },
+      soils: { available: true, value: { hydricFraction: 0.15, severeFraction: 0.15, moderateFraction: 0, dominantRating: 'severe', soilTypeCounts: {}, samplePoints: 400 }, provenance: { source: 'NRCS', sourceUrl: 'x' } },
+      easements: { available: true, value: { easementFraction: 0.15, easementTypes: ['EASEMENT'], sourceLayer: 'test', samplePoints: 400 }, provenance: { source: 'Local GIS', sourceUrl: 'x' } },
+      setback: { available: true, value: { setbackFraction: 0.15, setbackDistanceMeters: 6.1, intendedUse: 'residential', samplePoints: 400 }, provenance: { source: 'Setback', sourceUrl: 'x' } },
+    })
+    const nd = computeNetDevelopable(SQUARE_BOUNDARY, overlays)
+    const expectedFraction = 1 - Math.pow(0.85, 6)
+    expect(nd!.constrainedAcres).toBeCloseTo(nd!.grossAcres * expectedFraction, 1)
+    expect(nd!.netToGrossRatio).toBeCloseTo(1 - expectedFraction, 2)
+  })
+})
+
+describe('computeSetbackOverlay', () => {
+  // Use the ScreeningArea boundary type (type + coordinates) not just the
+  // coordinates array.
+  const boundary = SQUARE_BOUNDARY as unknown as NonNullable<import('../types/site').ScreeningArea['boundary']>
+
+  it('computes a nonzero setback fraction for a real parcel boundary', () => {
+    const result = computeSetbackOverlay(boundary, 'residential')
+    expect(result.available).toBe(true)
+    expect(result.value!.setbackFraction).toBeGreaterThan(0)
+    expect(result.value!.setbackDistanceMeters).toBe(6.1) // 20 ft for residential
+    expect(result.value!.intendedUse).toBe('residential')
+  })
+
+  it('uses a larger setback distance for industrial intended use', () => {
+    const residential = computeSetbackOverlay(boundary, 'residential')
+    const industrial = computeSetbackOverlay(boundary, 'industrial')
+    expect(industrial.value!.setbackDistanceMeters).toBeGreaterThan(residential.value!.setbackDistanceMeters)
+    expect(industrial.value!.setbackFraction).toBeGreaterThanOrEqual(residential.value!.setbackFraction)
   })
 })

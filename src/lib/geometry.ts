@@ -128,3 +128,68 @@ export function boundaryToArcGISPolygon(boundary: GeoBoundary): { rings: number[
   }
   return { rings, spatialReference: { wkid: 4326 } }
 }
+
+// ─── Setback distance computation ──────────────────────────────────────
+//
+// For setback overlays we need the distance from each interior grid point
+// to the nearest parcel boundary edge. We use a flat-earth approximation
+// (good enough at the sub-km scale of a parcel) converting lat/lng to
+// meters using the local latitude cosine.
+
+// Haversine distance between two lng/lat points in meters.
+function haversineMeters(lng1: number, lat1: number, lng2: number, lat2: number): number {
+  const R = 6_371_000
+  const toRad = Math.PI / 180
+  const dLat = (lat2 - lat1) * toRad
+  const dLng = (lng2 - lng1) * toRad
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLng / 2) ** 2
+  return 2 * R * Math.asin(Math.sqrt(a))
+}
+
+// Shortest distance from a point to a line segment (in lng/lat space, then
+// converted to meters using the local cosine). Uses the standard projection
+// of the point onto the segment parameterised t ∈ [0,1].
+export function pointToSegmentMeters(lng: number, lat: number, segStart: number[], segEnd: number[]): number {
+  const dx = segEnd[0] - segStart[0]
+  const dy = segEnd[1] - segStart[1]
+  if (dx === 0 && dy === 0) {
+    return haversineMeters(lng, lat, segStart[0], segStart[1])
+  }
+  let t = ((lng - segStart[0]) * dx + (lat - segStart[1]) * dy) / (dx * dx + dy * dy)
+  t = Math.max(0, Math.min(1, t))
+  const projLng = segStart[0] + t * dx
+  const projLat = segStart[1] + t * dy
+  return haversineMeters(lng, lat, projLng, projLat)
+}
+
+// Shortest distance from a point to the nearest edge of a GeoBoundary
+// (in meters). For a Polygon, checks the outer ring and all holes. For a
+// MultiPolygon, checks every ring of every polygon. Returns 0 if the
+// point is outside the boundary (already constrained by other means).
+export function pointToBoundaryDistanceMeters(lng: number, lat: number, boundary: GeoBoundary): number {
+  const rings: number[][][] = []
+  if (boundary.type === 'Polygon') {
+    for (const ring of boundary.coordinates) rings.push(ring)
+  } else {
+    for (const polygon of boundary.coordinates) {
+      for (const ring of polygon) rings.push(ring)
+    }
+  }
+  let minDist = Number.POSITIVE_INFINITY
+  for (const ring of rings) {
+    for (let i = 0; i < ring.length - 1; i += 1) {
+      const d = pointToSegmentMeters(lng, lat, ring[i], ring[i + 1])
+      if (d < minDist) minDist = d
+    }
+    // Close the ring if it's not already closed.
+    if (ring.length > 1) {
+      const last = ring[ring.length - 1]
+      const first = ring[0]
+      if (last[0] !== first[0] || last[1] !== first[1]) {
+        const d = pointToSegmentMeters(lng, lat, last, first)
+        if (d < minDist) minDist = d
+      }
+    }
+  }
+  return minDist === Number.POSITIVE_INFINITY ? 0 : minDist
+}

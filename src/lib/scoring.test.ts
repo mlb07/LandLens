@@ -140,7 +140,8 @@ describe('analyzeSite — parcel overlays', () => {
     easements: { available: true, value: { easementFraction: 0, easementTypes: [], sourceLayer: 'Travis County Tax Maps parcel layer', samplePoints: 400 }, provenance: { source: 'Local GIS', sourceUrl: 'x' } },
     contamination: { available: true, value: { facilityCount: 0, hasMajorFlag: false, facilityTypes: [], nearestName: '', bufferMeters: 100, samplePoints: 400 }, provenance: { source: 'EPA FRS', sourceUrl: 'x' } },
     species: { available: true, value: { criticalHabitatHit: false, criticalHabitatLayers: [], speciesCount: 0, habitatFraction: 0, samplePoints: 400 }, provenance: { source: 'USFWS ECOS', sourceUrl: 'x' } },
-    netDevelopable: { grossAcres: 10, floodwayAcres: 0, wetlandAcres: 0, steepSlopeAcres: 0, soilConstrainedAcres: 0, easementAcres: 0, constrainedAcres: 0, netDevelopableAcres: 10, netToGrossRatio: 1.0, samplePoints: 400 },
+    setback: { available: true, value: { setbackFraction: 0.1, setbackDistanceMeters: 6.1, intendedUse: 'residential', samplePoints: 400 }, provenance: { source: 'Setback', sourceUrl: 'x' } },
+    netDevelopable: { grossAcres: 10, floodwayAcres: 0, wetlandAcres: 0, steepSlopeAcres: 0, soilConstrainedAcres: 0, easementAcres: 0, setbackAcres: 1, constrainedAcres: 1, netDevelopableAcres: 9, netToGrossRatio: 0.9, samplePoints: 400 },
     fetchedAt: new Date().toISOString(),
   }
 
@@ -182,7 +183,7 @@ describe('analyzeSite — parcel overlays', () => {
     const soilOverlays: ParcelOverlayData = {
       ...goodOverlays,
       soils: { available: true, value: { hydricFraction: 0.2, severeFraction: 0.4, moderateFraction: 0.1, dominantRating: 'severe' as const, soilTypeCounts: { 'Clay': 1 }, samplePoints: 400 }, provenance: { source: 'NRCS', sourceUrl: 'x' } },
-      netDevelopable: { grossAcres: 10, floodwayAcres: 0, wetlandAcres: 0, steepSlopeAcres: 0, soilConstrainedAcres: 4, easementAcres: 0, constrainedAcres: 4, netDevelopableAcres: 6, netToGrossRatio: 0.6, samplePoints: 400 },
+      netDevelopable: { grossAcres: 10, floodwayAcres: 0, wetlandAcres: 0, steepSlopeAcres: 0, soilConstrainedAcres: 4, easementAcres: 0, setbackAcres: 0, constrainedAcres: 4, netDevelopableAcres: 6, netToGrossRatio: 0.6, samplePoints: 400 },
     }
     const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, soilOverlays)
     expect(result.metrics.netDevelopable.displayValue).toContain('6 net / 10 gross')
@@ -195,7 +196,7 @@ describe('analyzeSite — parcel overlays', () => {
     const easeOverlays: ParcelOverlayData = {
       ...goodOverlays,
       easements: { available: true, value: { easementFraction: 0.1, easementTypes: ['EASEMENT'], sourceLayer: 'Travis County Tax Maps parcel layer', samplePoints: 400 }, provenance: { source: 'Local GIS', sourceUrl: 'x' } },
-      netDevelopable: { grossAcres: 10, floodwayAcres: 0, wetlandAcres: 0, steepSlopeAcres: 0, soilConstrainedAcres: 0, easementAcres: 1, constrainedAcres: 1, netDevelopableAcres: 9, netToGrossRatio: 0.9, samplePoints: 400 },
+      netDevelopable: { grossAcres: 10, floodwayAcres: 0, wetlandAcres: 0, steepSlopeAcres: 0, soilConstrainedAcres: 0, easementAcres: 1, setbackAcres: 0, constrainedAcres: 1, netDevelopableAcres: 9, netToGrossRatio: 0.9, samplePoints: 400 },
     }
     const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, easeOverlays)
     expect(result.metrics.netDevelopable.displayValue).toContain('9 net / 10 gross')
@@ -256,7 +257,7 @@ describe('analyzeSite — parcel overlays', () => {
       species: { available: true, value: { criticalHabitatHit: true, criticalHabitatLayers: ['Golden-cheeked Warbler'], speciesCount: 1, habitatFraction: 0.5, samplePoints: 400 }, provenance: { source: 'USFWS ECOS', sourceUrl: 'x' } },
     }
     const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, gated)
-    expect(result.metrics.netDevelopable.displayValue).toContain('10 net / 10 gross')
+    expect(result.metrics.netDevelopable.displayValue).toContain('9 net / 10 gross')
     expect(result.gatedToManual).toBe(true)
   })
 })
