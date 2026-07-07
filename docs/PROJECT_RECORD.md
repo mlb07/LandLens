@@ -188,7 +188,7 @@ The official-data provider, scoring layer, and parcel-provider interface are sep
 4. ~~Add EPA Envirofacts / UST Finder for contamination screening and USFWS IPaC / ECOS for species/historic screening.~~ **Done (Phase 4).**
 5. Add zoning/future-land-use and utility-capacity adapters jurisdiction by jurisdiction. **Local adapter framework in place (Phase 6); register specific jurisdictions as needed.**
 6. Add intended-use-specific market and financial models instead of using population and permits as the sole market signals. **Partially addressed (Phase 10): `marketMetric` is now intended-use-aware — `residential`/`mixed-use` get full BPS permit-trend credit because Census BPS measures residential-structure permits; `commercial`/`industrial`/`other` get a capped permit contribution plus a surfaced unknown recommending an intended-use-specific market study. True intended-use models (commercial rents/vacancy, industrial lease rates/employment) still require a market-data adapter and are deferred.**
-7. ~~Add automated provider-contract tests and browser tests for the critical map-save-compare-report flow.~~ **56 automated tests added (Phase 7 + 8): geometry, scoring, storage migration, local adapter registry. Browser E2E tests still deferred.**
+7. ~~Add automated provider-contract tests and browser tests for the critical map-save-compare-report flow.~~ **84 automated tests added (Phase 7 + 8 + 9 + 10 + 11): geometry, scoring, storage migration, local adapter registry, parcelOverlayProvider compute functions (slope, stormwater, easements, net developable, WKT). Browser E2E tests still deferred.**
 8. ~~Add NOAA sea-level rise, USFS wildfire risk, and EPA radon as a 0 to −5 regional hazard modifier.~~ **Done (Phase 5).**
 9. Register local easement/ROW adapters for high-priority jurisdictions (e.g. major Texas counties, Florida, California). **Travis County, TX easement adapter registered (Phase 8). All eight verified Texas county parcel layers — Travis, Dallas, Harris, Bexar, Collin, Williamson, Montgomery, Tarrant — now have easement adapters registered (Phase 9).**
 10. ~~Add parcel-wide soils and stormwater overlays to complement the existing FEMA/NWI/slope parcel overlays.~~ **Done (Phase 8).**
@@ -196,6 +196,17 @@ The official-data provider, scoring layer, and parcel-provider interface are sep
 12. Jurisdiction-specific setback overlays for the net developable acreage calculation (setbacks are still explicitly NOT subtracted).
 
 ## Change log
+
+### 2026-07-06 — Provider contract tests for parcel overlay compute functions (Phase 11)
+
+- **New test file:** `src/data/parcelOverlayProvider.test.ts` with 19 tests covering the pure compute functions that were previously untested — the most bug-prone part of the codebase.
+- **`ringsToWkt`** (3 tests): single-ring polygon, polygon with hole, negative US longitudes.
+- **`computeSlopeFromElevations`** (3 tests): flat grid returns 0% slope, steep grid returns >20% max slope, grid with <4 samples returns unavailable.
+- **`computeStormwaterFromElevations`** (2 tests): positive outfall when terrain slopes to a low point, flat terrain reports no outfall + flatness index 1.
+- **`computeEasementsOverlayFromAdapter` / `buildEasementsOverlay`** (4 tests): unavailable when no adapter result, 5% placeholder fraction when presence-only flag, zero fraction when no easements, polygon intersection against the parcel grid.
+- **`computeNetDevelopable`** (7 tests): zero-area boundary returns null, no constraints returns full net developable, floodway subtraction, hydric/severe soil subtraction (max of the two), easement subtraction, 5-factor independence approximation math verified (`1-(0.8)^5 = 0.67232`), and the explicit assertion that contamination + critical habitat do NOT subtract from net developable.
+- Exported `SharedElevations`, `computeSlopeFromElevations`, `computeStormwaterFromElevations`, `ringsToWkt`, `computeEasementsOverlayFromAdapter`, and `computeNetDevelopable` so they're testable from the test file. These are pure functions with no internal state; exporting them adds no API surface risk.
+- `npm run test` now 84 tests (was 65). Lint, build, and `tsc -b` all clean. No new runtime dependencies.
 
 ### 2026-07-06 — Intended-use-aware market weighting (Phase 10)
 

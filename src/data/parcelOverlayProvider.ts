@@ -442,7 +442,7 @@ async function elevationAt(lng: number, lat: number, signal?: AbortSignal): Prom
 // Shared elevation sampling for slope + stormwater. Both parcel-wide metrics
 // are derived from the same 25-point USGS EPQS grid so the API is hit once
 // per parcel rather than once per category.
-interface SharedElevations {
+export interface SharedElevations {
   points: ReturnType<typeof gridSampleBoundary>['points']
   spacingMeters: number
   elevations: number[]             // aligned to points; NaN if a sample failed
@@ -479,7 +479,7 @@ async function sampleParcelElevations(boundary: GeoBoundary, signal?: AbortSigna
   return { points, spacingMeters, elevations, grid }
 }
 
-function computeSlopeFromElevations(shared: SharedElevations): SlopeOverlay {
+export function computeSlopeFromElevations(shared: SharedElevations): SlopeOverlay {
   const { points, spacingMeters, grid } = shared
   const cosLat = Math.cos(((points[0].lat + points[points.length - 1].lat) / 2) * Math.PI / 180)
   const slopes: number[] = []
@@ -547,7 +547,7 @@ function computeSlopeFromElevations(shared: SharedElevations): SlopeOverlay {
 
 // ─── Stormwater overlay (shares the slope elevation grid) ───────────────
 
-function computeStormwaterFromElevations(shared: SharedElevations): StormwaterOverlay {
+export function computeStormwaterFromElevations(shared: SharedElevations): StormwaterOverlay {
   const { points, spacingMeters, grid } = shared
   if (grid.size < 4) {
     return { available: false, provenance: STORMWATER_PROVENANCE, error: 'Too few USGS elevation samples for parcel drainage analysis.' }
@@ -832,7 +832,7 @@ async function fetchSoilsOverlay(boundary: GeoBoundary, gridPoints: { lng: numbe
 // we hand it the rings as-is and accept that some parcels may need re-orientation
 // (soil queries on a poorly-oriented polygon simply return no rows, which
 // we surface as an honest empty result).
-function ringsToWkt(rings: number[][][]): string {
+export function ringsToWkt(rings: number[][][]): string {
   const ringText = rings.map((ring) => {
     const pairs = ring.map(([lng, lat]) => `${lng} ${lat}`).join(', ')
     return `(${pairs})`
@@ -856,7 +856,7 @@ export interface EasementsOverlayInput {
   polygonRings?: number[][][]   // optional: returned easement geometry to intersect
 }
 
-function computeEasementsOverlayFromAdapter(gridPoints: { lng: number; lat: number }[], result: EasementsOverlayInput): EasementsOverlay {
+export function computeEasementsOverlayFromAdapter(gridPoints: { lng: number; lat: number }[], result: EasementsOverlayInput): EasementsOverlay {
   if (!result.polygonRings || !result.polygonRings.length) {
     // Adapter reported presence/absence without polygon geometry. We don't
     // have easement polygons to intersect the parcel grid with, so a recorded
@@ -1058,7 +1058,7 @@ async function fetchSpeciesOverlay(boundary: GeoBoundary, gridPoints: { lng: num
 
 // ─── Net developable acreage ────────────────────────────────────────────
 
-function computeNetDevelopable(
+export function computeNetDevelopable(
   boundary: GeoBoundary,
   overlays: ParcelOverlayData,
 ): NetDevelopableOverlay | null {
