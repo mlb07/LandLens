@@ -13,7 +13,7 @@ import { registerDefaultLocalAdapters } from './data/localAdapters'
 import { getStateDefinition, stateDefinitions } from './data/states'
 import { analyzeSite } from './lib/scoring'
 import { loadSites, saveSites } from './lib/storage'
-import { EMPTY_SITE_INPUTS, type Coordinates, type ParcelSelection, type SavedSite, type SiteAnalysis, type SiteInputs } from './types/site'
+import { EMPTY_SITE_INPUTS, type Coordinates, type ParcelSelection, type ParcelSnapshot, type SavedSite, type SiteAnalysis, type SiteInputs } from './types/site'
 import './App.css'
 
 type View = 'explorer' | 'saved' | 'report'
@@ -26,6 +26,21 @@ const INITIAL_COORDINATES: Coordinates = INITIAL_STATE.center
 // Register verified local jurisdiction adapters (Travis County easements,
 // etc.). Idempotent — safe to call once at module load.
 registerDefaultLocalAdapters()
+
+function snapshotParcel(parcel?: ParcelSelection): ParcelSnapshot | undefined {
+  if (parcel?.status !== 'found' || !parcel.id) return undefined
+  return { id: parcel.id, acres: parcel.acres, acreageKind: parcel.acreageKind, facts: parcel.facts, provenance: parcel.provenance }
+}
+
+function restoreParcel(site: SavedSite): ParcelSelection | undefined {
+  if (!site.parcel) return undefined
+  return {
+    status: 'found', message: 'Saved official parcel snapshot; refreshing live source.',
+    id: site.parcel.id, acres: site.parcel.acres, acreageKind: site.parcel.acreageKind,
+    facts: site.parcel.facts, provenance: site.parcel.provenance,
+    boundary: site.screeningArea?.kind === 'parcel' ? site.screeningArea.boundary : undefined,
+  }
+}
 
 function App() {
   const [view, setView] = useState<View>('explorer')
@@ -67,7 +82,7 @@ function App() {
       if (!current) return
       officialDataRef.current = data
       setOfficialData(data)
-      const nextAnalysis = analyzeSite(coordinates, inputsRef.current, data, parcelRef.current?.status === 'found', overlaysRef.current, hazardsRef.current)
+      const nextAnalysis = analyzeSite(coordinates, inputsRef.current, data, parcelRef.current?.status === 'found', overlaysRef.current, hazardsRef.current, parcelRef.current)
       setAnalysis(nextAnalysis)
       setSourcesPending(pending.length)
       if (nextAnalysis.scoredWeight >= 50 || pending.length === 0) setAnalysisLoading(false)
@@ -75,7 +90,7 @@ function App() {
       if (!current) return
       officialDataRef.current = data
       setOfficialData(data)
-      setAnalysis(analyzeSite(coordinates, inputsRef.current, data, parcelRef.current?.status === 'found', overlaysRef.current, hazardsRef.current))
+      setAnalysis(analyzeSite(coordinates, inputsRef.current, data, parcelRef.current?.status === 'found', overlaysRef.current, hazardsRef.current, parcelRef.current))
       setSourcesPending(0)
       setAnalysisLoading(false)
     }).catch(() => {
@@ -126,7 +141,7 @@ function App() {
         inputsRef.current = nextInputs
         setInputs(nextInputs)
       }
-      setAnalysis(analyzeSite(coordinates, changed ? nextInputs : currentInputs, officialDataRef.current, result.status === 'found', overlaysRef.current, hazardsRef.current))
+      setAnalysis(analyzeSite(coordinates, changed ? nextInputs : currentInputs, officialDataRef.current, result.status === 'found', overlaysRef.current, hazardsRef.current, result))
     }).catch(() => {
       if (!current) return
       const result: ParcelSelection = { status: 'error', message: 'Parcel lookup was interrupted or unavailable.' }
@@ -150,13 +165,13 @@ function App() {
       if (!current) return
       overlaysRef.current = data
       setOverlays(data)
-      setAnalysis(analyzeSite(coordinates, inputsRef.current, officialDataRef.current, true, data, hazardsRef.current))
+      setAnalysis(analyzeSite(coordinates, inputsRef.current, officialDataRef.current, true, data, hazardsRef.current, parcelRef.current))
     }, activeStateCode, coordinates).then((data) => {
       if (!current) return
       overlaysRef.current = data
       setOverlays(data)
       setOverlaysLoading(false)
-      setAnalysis(analyzeSite(coordinates, inputsRef.current, officialDataRef.current, true, data, hazardsRef.current))
+      setAnalysis(analyzeSite(coordinates, inputsRef.current, officialDataRef.current, true, data, hazardsRef.current, parcelRef.current))
     }).catch(() => {
       if (!current) return
       setOverlaysLoading(false)
@@ -176,7 +191,7 @@ function App() {
     const updated = { ...overlaysRef.current, setback }
     overlaysRef.current = updated
     setOverlays(updated)
-    setAnalysis(analyzeSite(coordinates, inputsRef.current, officialDataRef.current, true, updated, hazardsRef.current))
+    setAnalysis(analyzeSite(coordinates, inputsRef.current, officialDataRef.current, true, updated, hazardsRef.current, parcelRef.current))
   }, [inputs.intendedUse, parcelBoundary, coordinates])
 
   // Fetch regional hazards (sea-level rise, wildfire, radon) alongside official data.
@@ -187,7 +202,7 @@ function App() {
       if (!current) return
       hazardsRef.current = data
       setHazards(data)
-      setAnalysis(analyzeSite(coordinates, inputsRef.current, officialDataRef.current, parcelRef.current?.status === 'found', overlaysRef.current, data))
+      setAnalysis(analyzeSite(coordinates, inputsRef.current, officialDataRef.current, parcelRef.current?.status === 'found', overlaysRef.current, data, parcelRef.current))
     }).catch(() => {
       if (!current) return
     })
@@ -248,7 +263,7 @@ function App() {
   }
 
   function runAnalysis() {
-    setAnalysis(analyzeSite(coordinates, inputs, officialData, parcel?.status === 'found', overlays, hazards))
+    setAnalysis(analyzeSite(coordinates, inputs, officialData, parcel?.status === 'found', overlays, hazards, parcel))
     setDirty(false)
     setPanelTab('analysis')
   }
@@ -287,17 +302,19 @@ function App() {
 
   function saveCurrentSite() {
     const state = getStateDefinition(activeStateCode)
+    const existingSite = sites.find((site) => site.id === currentId)
     const finalInputs = { ...inputs, name: inputs.name.trim() || `${state.name} site ${coordinates.lat.toFixed(3)}, ${coordinates.lng.toFixed(3)}` }
-    const finalAnalysis = analyzeSite(coordinates, finalInputs, officialData, parcel?.status === 'found', overlays, hazards)
+    const finalAnalysis = analyzeSite(coordinates, finalInputs, officialData, parcel?.status === 'found', overlays, hazards, parcel)
     const screeningArea = parcel?.status === 'found' && parcel.boundary
       ? { kind: 'parcel' as const, provider: parcel.provenance?.source, boundary: parcel.boundary }
-      : { kind: 'point' as const }
+      : existingSite?.screeningArea ?? { kind: 'point' as const }
     const now = new Date().toISOString()
+    const parcelSnapshot = snapshotParcel(parcel) ?? existingSite?.parcel
     if (currentId) {
-      const next = sites.map((site) => site.id === currentId ? { ...site, stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, updatedAt: now } : site)
+      const next = sites.map((site) => site.id === currentId ? { ...site, stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, parcel: parcelSnapshot, updatedAt: now } : site)
       persistSites(next)
     } else {
-      const saved: SavedSite = { id: crypto.randomUUID(), stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, createdAt: now, updatedAt: now }
+      const saved: SavedSite = { id: crypto.randomUUID(), stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, parcel: parcelSnapshot, createdAt: now, updatedAt: now }
       persistSites([saved, ...sites])
       setCurrentId(saved.id)
     }
@@ -309,16 +326,17 @@ function App() {
   }
 
   function openSite(site: SavedSite) {
+    const restoredParcel = restoreParcel(site)
     setActiveStateCode(site.stateCode)
     setCoordinates(site.coordinates)
     setInputs(site.inputs)
     inputsRef.current = site.inputs
     officialDataRef.current = undefined
-    parcelRef.current = undefined
+    parcelRef.current = restoredParcel
     overlaysRef.current = null
     hazardsRef.current = null
     setOfficialData(undefined)
-    setParcel(undefined)
+    setParcel(restoredParcel)
     setOverlays(null)
     setHazards(null)
     setOverlaysLoading(false)
@@ -340,12 +358,15 @@ function App() {
   }
 
   function reportCurrent() {
+    const existingSite = sites.find((site) => site.id === currentId)
+    const parcelSnapshot = snapshotParcel(parcel) ?? existingSite?.parcel
     const site: SavedSite = {
       id: currentId ?? 'preview', stateCode: activeStateCode, coordinates, inputs,
-      analysis: dirty ? analyzeSite(coordinates, inputs, officialData, parcel?.status === 'found', overlays, hazards) : analysis,
+      analysis: dirty ? analyzeSite(coordinates, inputs, officialData, parcel?.status === 'found', overlays, hazards, parcel) : analysis,
       screeningArea: parcel?.status === 'found' && parcel.boundary
         ? { kind: 'parcel', provider: parcel.provenance?.source, boundary: parcel.boundary }
-        : { kind: 'point' },
+        : existingSite?.screeningArea ?? { kind: 'point' },
+      parcel: parcelSnapshot,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     }
     showReport(site, 'explorer')

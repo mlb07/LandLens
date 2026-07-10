@@ -65,6 +65,7 @@ describe('storage', () => {
         strengths: [], redFlags: [], unknowns: [], nextSteps: [],
       },
       screeningArea: { kind: 'point' },
+      parcel: { id: 'P-100', acres: 10, acreageKind: 'assessor', facts: { marketValue: 500_000, zoning: 'C2', yearBuilt: 2001 }, provenance: { source: 'County assessor', sourceUrl: 'https://example.gov' } },
       createdAt: '2026-06-24T00:00:00Z',
       updatedAt: '2026-06-24T00:00:00Z',
     }
@@ -72,6 +73,7 @@ describe('storage', () => {
     const loaded = loadSites()
     expect(loaded).toHaveLength(1)
     expect(loaded[0].id).toBe('test-1')
+    expect(loaded[0].parcel?.facts).toEqual({ marketValue: 500_000, zoning: 'C2', yearBuilt: 2001 })
   })
 
   it('migrates legacy v1 sites to the new 13-category shape', () => {

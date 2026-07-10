@@ -1,7 +1,7 @@
 import type { OfficialSiteData } from '../data/officialDataProvider'
 import type { ParcelOverlayData, SoilsOverlay, StormwaterOverlay, EasementsOverlay, ContaminationOverlay, SpeciesOverlay } from '../data/parcelOverlayProvider'
 import type { RegionalHazardData } from '../data/regionalHazardProvider'
-import type { Coordinates, HardGate, IntendedUse, MetricResult, ScoreCategory, SiteAnalysis, SiteInputs, VerdictTone } from '../types/site'
+import type { Coordinates, HardGate, IntendedUse, MetricResult, ParcelSelection, ScoreCategory, SiteAnalysis, SiteInputs, VerdictTone } from '../types/site'
 
 // Core weighted categories — weights sum to 100. See docs/PROJECT_RECORD.md.
 export const CATEGORY_WEIGHTS: Record<ScoreCategory, number> = {
@@ -87,28 +87,33 @@ function userMetric(category: ScoreCategory, score: number, displayValue: string
 
 // ---------- Per-category metric builders ----------
 
-function zoningMetric(inputs: SiteInputs, official?: OfficialSiteData['zoning']): MetricResult {
+function zoningMetric(inputs: SiteInputs, official?: OfficialSiteData['zoning'], parcel?: ParcelSelection): MetricResult {
   const notes = inputs.zoningNotes.trim()
-  if (official?.available && official.value) {
-    const code = official.value.zoningCode || official.value.baseDistrict || 'Unlabeled district'
-    const base = official.value.baseDistrict || code
+  const mappedZoning = official?.available && official.value
+    ? { code: official.value.zoningCode || official.value.baseDistrict || 'Unlabeled district', base: official.value.baseDistrict || official.value.zoningCode || 'Unlabeled district', jurisdiction: official.value.jurisdiction, provenance: official.provenance }
+    : parcel?.facts?.zoning
+      ? { code: parcel.facts.zoning, base: parcel.facts.zoning, jurisdiction: parcel.facts.municipality || parcel.facts.county || 'parcel jurisdiction', provenance: parcel.provenance }
+      : undefined
+  if (mappedZoning) {
+    const { code, base, jurisdiction, provenance } = mappedZoning
     const residential = /^(SF|MF|RM|MH|P)/i.test(base)
     const commercial = /^(CS|CH|GR|LR|GO|LO|NO|CR|CBD|DMU|MU)/i.test(base)
     const industrial = /^(LI|IP|MI)/i.test(base)
     const mixed = /^(MU|DMU|CS-MU|GR-MU)/i.test(base)
+    const recognizedDistrictFamily = residential || commercial || industrial || mixed
     const likelyCompatible = inputs.intendedUse === 'residential' ? (residential || mixed)
       : inputs.intendedUse === 'commercial' ? (commercial || mixed)
         : inputs.intendedUse === 'mixed-use' ? mixed
           : inputs.intendedUse === 'industrial' ? industrial
             : true
-    const score = likelyCompatible ? 72 : 32
+    const score = !recognizedDistrictFamily ? 58 : likelyCompatible ? 72 : 32
     const userWarning = /\b(prohibit\w*|not allow\w*|not permit\w*)/i.test(notes)
     return {
       category: 'zoning', label: CATEGORY_LABELS.zoning, score: userWarning ? 15 : score, weight: CATEGORY_WEIGHTS.zoning,
-      status: 'official', provenance: official.provenance,
-      displayValue: `${code} · ${official.value.jurisdiction}`,
-      summary: userWarning ? 'Your zoning note says the intended use is likely prohibited.' : likelyCompatible ? `The mapped ${code} district is a preliminary match for ${inputs.intendedUse.replace('-', ' ')} use.` : `The mapped ${code} district is not an obvious preliminary match for ${inputs.intendedUse.replace('-', ' ')} use.`,
-      detail: `Official local zoning atlas result: ${code} (base district ${base}). LandLens uses a conservative district-family screen, not a legal use determination. Overlay districts, conditional-use rules, compatibility, parking, impervious-cover limits, subdivision plats, and adopted municipal code can change the outcome. Confirm by-right status with ${official.value.jurisdiction}.${notes ? ' Your supplied zoning note is retained as additional context.' : ''}`,
+      status: 'official', provenance,
+      displayValue: `${code} · ${jurisdiction}`,
+      summary: userWarning ? 'Your zoning note says the intended use is likely prohibited.' : !recognizedDistrictFamily ? `The mapped ${code} district uses a local code LandLens does not interpret automatically.` : likelyCompatible ? `The mapped ${code} district is a preliminary match for ${inputs.intendedUse.replace('-', ' ')} use.` : `The mapped ${code} district is not an obvious preliminary match for ${inputs.intendedUse.replace('-', ' ')} use.`,
+      detail: `Official mapped zoning result: ${code} (base district ${base}). LandLens uses a conservative district-family screen, not a legal use determination. Overlay districts, conditional-use rules, compatibility, parking, impervious-cover limits, subdivision plats, and adopted municipal code can change the outcome. Confirm by-right status with ${jurisdiction}.${notes ? ' Your supplied zoning note is retained as additional context.' : ''}`,
     }
   }
   if (!notes) {
@@ -265,7 +270,7 @@ function slopeMetric(data: OfficialSiteData['slope'] | undefined, overlay?: Parc
   }
 }
 
-function utilitiesMetric(inputs: SiteInputs, official?: OfficialSiteData['utilityService'], local?: OfficialSiteData['localUtility']): MetricResult {
+function utilitiesMetric(inputs: SiteInputs, official?: OfficialSiteData['utilityService'], local?: OfficialSiteData['localUtility'], parcel?: ParcelSelection): MetricResult {
   if (local?.available && local.value) {
     const v = local.value
     let score = v.inServiceArea ? 68 : 28
@@ -278,6 +283,22 @@ function utilitiesMetric(inputs: SiteInputs, official?: OfficialSiteData['utilit
       displayValue: v.inServiceArea ? `${v.utilityName} ${v.utilityType} area` : `Outside mapped ${v.utilityName} area`,
       summary: v.inServiceArea ? `The point falls within the mapped ${v.utilityName} ${v.utilityType} service area.${official?.available && official.value?.inWaterServiceArea ? ' EPA also maps public water service.' : ''}` : `The point is outside the mapped ${v.utilityName} ${v.utilityType} service area.`,
       detail: `${v.utilityName}'s mapped ${v.utilityType} service area is a screening signal only. It does not prove capacity, allocation, extension cost, utility design, or a right to serve.${official?.available && official.value ? ' EPA water-service mapping is also available as supplemental evidence.' : ''} Obtain written will-serve and capacity letters before ranking or acquisition.`,
+    }
+  }
+  const parcelServices = [parcel?.facts?.waterService, parcel?.facts?.sewerService, parcel?.facts?.utilities].filter(Boolean) as string[]
+  if (parcelServices.length) {
+    const serviceText = parcelServices.join(' · ')
+    const unavailableCount = parcelServices.filter((service) => /\b(none|not available|unknown|no service)\b/i.test(service)).length
+    const allUnavailable = unavailableCount === parcelServices.length
+    let score = allUnavailable ? 32 : unavailableCount > 0 ? 55 : 66
+    if (inputs.utilitiesNearby === 'yes') score = Math.max(score, 78)
+    if (inputs.utilitiesNearby === 'no') score = Math.min(score, 35)
+    return {
+      category: 'utilities', label: CATEGORY_LABELS.utilities, score, weight: CATEGORY_WEIGHTS.utilities,
+      status: 'official', provenance: parcel?.provenance,
+      displayValue: serviceText,
+      summary: allUnavailable ? 'The parcel record does not identify a mapped utility-service path.' : unavailableCount > 0 ? 'The parcel record identifies only a partial utility-service path.' : 'The assessor/parcel record publishes utility-service descriptors for this parcel.',
+      detail: `Parcel record utility fields: ${serviceText}. These attributes can be generalized, coded, or outdated. They do not prove capacity, allocation, connection location, extension cost, or a right to serve. Obtain written will-serve and capacity letters.`,
     }
   }
   // Prefer official EPA water service area data when available.
@@ -312,9 +333,18 @@ function utilitiesMetric(inputs: SiteInputs, official?: OfficialSiteData['utilit
   )
 }
 
-function accessMetric(data: OfficialSiteData['road'] | undefined, inputs: SiteInputs): MetricResult {
+function accessMetric(data: OfficialSiteData['road'] | undefined, inputs: SiteInputs, parcel?: ParcelSelection): MetricResult {
+  const mappedFrontage = parcel?.facts?.frontageFeet
   if (!data?.available || !data.value) {
     if (inputs.roadFrontage === 'unknown') {
+      if (mappedFrontage) {
+        return {
+          category: 'access', label: CATEGORY_LABELS.access, score: 72, weight: CATEGORY_WEIGHTS.access,
+          status: 'official', provenance: parcel?.provenance, displayValue: `${mappedFrontage.toLocaleString()} ft reported frontage`,
+          summary: 'The parcel record reports frontage, but legal and usable access remain unverified.',
+          detail: 'Assessor frontage is a dimensional attribute, not proof of deeded access, a public-road connection, driveway approval, or adequate roadway capacity. Confirm title, plat, road authority, and access permits.',
+        }
+      }
       return missingMetric(
         'access',
         'Access and frontage need a TIGERweb road result or your frontage answer. Legal access and frontage must be confirmed from title, plats, and the road authority.',
@@ -329,12 +359,13 @@ function accessMetric(data: OfficialSiteData['road'] | undefined, inputs: SiteIn
   }
   const distance = data.value.nearestDistanceMeters
   let score = distance <= 25 ? 92 : distance <= 75 ? 80 : distance <= 150 ? 65 : distance <= 300 ? 48 : 30
+  if (mappedFrontage) score = Math.max(score, 80)
   if (inputs.roadFrontage === 'yes') score = Math.max(score, 82)
   if (inputs.roadFrontage === 'no') score = Math.min(score, 22)
   return {
     category: 'access', label: CATEGORY_LABELS.access, score, weight: CATEGORY_WEIGHTS.access,
     status: inputs.roadFrontage === 'unknown' ? 'official' : 'user', provenance: data.provenance,
-    displayValue: `${distance} m to ${data.value.roadName}`,
+    displayValue: `${distance} m to ${data.value.roadName}${mappedFrontage ? ` · ${mappedFrontage.toLocaleString()} ft frontage` : ''}`,
     summary: inputs.roadFrontage === 'no' ? 'You indicated no road frontage, which is a major constraint.' : distance <= 75 ? 'A Census-mapped road is close to the selected point.' : distance <= 300 ? 'A mapped road is nearby, but access may require additional work.' : 'No Census-mapped road was found close to the selected point.',
     detail: `${data.value.roadName} is classified as a ${data.value.roadClass.toLowerCase()} road. Proximity is not proof of legal access, adequate frontage, driveway approval, public maintenance, or capacity.`,
   }
@@ -736,16 +767,16 @@ function getVerdict(rawScore: number | null, scoredWeight: number, gatedToManual
 
 // ---------- Main entry ----------
 
-export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, official?: OfficialSiteData, hasParcelBoundary = false, overlays?: ParcelOverlayData | null, hazards?: RegionalHazardData | null): SiteAnalysis {
+export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, official?: OfficialSiteData, hasParcelBoundary = false, overlays?: ParcelOverlayData | null, hazards?: RegionalHazardData | null, parcel?: ParcelSelection): SiteAnalysis {
   const hasOverlays = Boolean(overlays)
   const metrics: Record<ScoreCategory, MetricResult> = {
-    zoning: zoningMetric(inputs, official?.zoning),
+    zoning: zoningMetric(inputs, official?.zoning, parcel),
     netDevelopable: netDevelopableMetric(inputs, hasParcelBoundary, overlays),
     floodplain: floodplainMetric(official?.flood, overlays?.floodplain),
     wetlands: wetlandsMetric(official?.environmental, overlays?.wetlands),
     slope: slopeMetric(official?.slope, overlays?.slope),
-    utilities: utilitiesMetric(inputs, official?.utilityService, official?.localUtility),
-    access: accessMetric(official?.road, inputs),
+    utilities: utilitiesMetric(inputs, official?.utilityService, official?.localUtility, parcel),
+    access: accessMetric(official?.road, inputs, parcel),
     soils: soilsMetric(official?.soils, overlays?.soils),
     stormwater: stormwaterMetric(official?.stormwater, overlays?.stormwater),
     easements: easementsMetric(official?.easements, overlays?.easements),

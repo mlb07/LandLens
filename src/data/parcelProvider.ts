@@ -1,5 +1,6 @@
 import type { Coordinates, DataProvenance, ParcelSelection, ScreeningArea } from '../types/site'
 import { externalRequest } from './externalRequest'
+import { getParcelFactFieldNames, normalizeParcelFacts, type ParcelFactsFieldMap } from './parcelFacts'
 
 interface GeoJsonFeature {
   type: 'Feature'
@@ -26,6 +27,7 @@ interface ParcelFieldMap {
   mappedAcres?: string[]
   squareFeet?: string[]
   vintage?: string[]
+  facts?: ParcelFactsFieldMap
 }
 
 interface ParcelAdapter {
@@ -62,6 +64,7 @@ function adapter(
     ...(fields.mappedAcres || []),
     ...(fields.squareFeet || []),
     ...(fields.vintage || []),
+    ...getParcelFactFieldNames(fields.facts),
   ])).join(',')
   return { id, stateCode, queryUrl: `${serviceUrl}/query`, outFields, fields, provenance, ...options }
 }
@@ -70,56 +73,85 @@ const parcelAdapters: ParcelAdapter[] = [
   adapter(
     'travis-county-tax-maps', 'TX',
     'https://taxmaps.traviscountytx.gov/arcgis/rest/services/Parcels/FeatureServer/0',
-    { ids: ['PROP_ID', 'geo_id'], names: ['situs_address', 'sub_dec'], assessorAcres: ['tcad_acres', 'legal_acre'], mappedAcres: ['GIS_acres'] },
+    { ids: ['PROP_ID', 'geo_id'], names: ['situs_address', 'sub_dec'], assessorAcres: ['tcad_acres', 'legal_acre'], mappedAcres: ['GIS_acres'], facts: {
+      situsAddress: ['situs_address', 'py_address'], propertyUseDescription: ['land_type_desc'], propertyUseCode: ['land_state_cd'], subdivision: ['sub_dec'], legalDescription: ['legal_desc'],
+      marketValue: ['market_value'], appraisedValue: ['appraised_val'], assessedTotalValue: ['assessed_val'],
+      assessedLandValue: { sum: ['land_homesite_val', 'land_non_homesite_val'] }, assessedImprovementValue: { sum: ['imprv_homesite_val', 'imprv_non_homesite_val'] }, yearBuilt: ['F1year_imprv'],
+    } },
     source('Travis County Tax Maps parcel layer', 'https://taxmaps.traviscountytx.gov/arcgis/rest/services/Parcels/FeatureServer/0', 'Live Travis County parcel service'),
     { bounds: { south: 30.01, west: -98.2, north: 30.65, east: -97.36 } },
   ),
   adapter(
     'city-of-dallas-certified-tax-parcels', 'TX',
     'https://services2.arcgis.com/rwnOSbfKSwyTBcwN/arcgis/rest/services/CRMHostedLayers/FeatureServer/13',
-    { ids: ['GIS_ACCT', 'ACCT'], names: ['PROPNAM', ['ST_NUM', 'ST_DIR', 'ST_NAME', 'ST_TYPE']], squareFeet: ['AREA_FEET'], vintage: ['APPRAISALYEAR'] },
+    { ids: ['GIS_ACCT', 'ACCT'], names: ['PROPNAM', ['ST_NUM', 'ST_DIR', 'ST_NAME', 'ST_TYPE']], squareFeet: ['AREA_FEET'], vintage: ['APPRAISALYEAR'], facts: {
+      situsAddress: { join: ['ST_NUM', 'ST_DIR', 'ST_NAME', 'ST_TYPE', 'UNITID'] }, municipality: ['CITY'], county: ['COUNTY'], propertyClass: ['PROP_CL', 'BLDG_CL'],
+      legalDescription: { join: ['LEGAL_1', 'LEGAL_2', 'LEGAL_3', 'LEGAL_4', 'LEGAL_5'] }, taxYear: ['APPRAISALYEAR'], recordUrl: ['Website'],
+    } },
     source('City of Dallas GIS certified tax parcels', 'https://services2.arcgis.com/rwnOSbfKSwyTBcwN/arcgis/rest/services/CRMHostedLayers/FeatureServer/13', 'Certified appraisal parcel service'),
     { bounds: { south: 32.55, west: -97.04, north: 33.06, east: -96.51 } },
   ),
   adapter(
     'harris-county-parcels', 'TX',
     'https://services.arcgis.com/su8ic9KbA7PYVxPS/arcgis/rest/services/Harris_County_Parcels/FeatureServer/1',
-    { ids: ['HCAD_NUM', 'acct_num', 'LOWPARCELID'], names: [['SiteNumber', 'site_str_num', 'site_str_name', 'site_str_sfx', 'site_city']], assessorAcres: ['Acreage', 'acreage_1'], squareFeet: ['land_sqft'], vintage: ['tax_year'] },
+    { ids: ['HCAD_NUM', 'acct_num', 'LOWPARCELID'], names: [['SiteNumber', 'site_str_num', 'site_str_name', 'site_str_sfx', 'site_city']], assessorAcres: ['Acreage', 'acreage_1'], squareFeet: ['land_sqft'], vintage: ['tax_year'], facts: {
+      situsAddress: { join: ['SiteNumber', 'site_str_num', 'site_str_name', 'site_str_sfx'] }, municipality: ['site_city'], county: ['site_county'], propertyUseCode: ['land_use'],
+      legalDescription: { join: ['legal_dscr_1', 'legal_dscr_2', 'legal_dscr_3', 'legal_dscr_4'] }, assessedLandValue: ['land_value'], assessedImprovementValue: ['impr_value', 'bld_value'],
+      appraisedValue: ['total_appraised_val'], marketValue: ['total_market_val'], taxableValue: ['tax_value'], taxYear: ['tax_year'],
+    } },
     source('Harris County GIS / HCAD parcel polygons', 'https://services.arcgis.com/su8ic9KbA7PYVxPS/arcgis/rest/services/Harris_County_Parcels/FeatureServer/1', 'HCAD parcels received December 2025'),
     { bounds: { south: 29.49, west: -95.98, north: 30.19, east: -94.89 } },
   ),
   adapter(
     'bexar-cad-public-parcels', 'TX',
     'https://maps.bcad.org/arcgis/rest/services/PAMapSearch/MapServer/6',
-    { ids: ['PAMaps.dbo.web_map_property.pacs_prop_id', 'PAMaps.DBO.ParcelFabric_Parcels.PROP_ID', 'PAMaps.dbo.web_map_property.geo_id'], names: ['PAMaps.dbo.web_map_property.dba_name', 'PAMaps.dbo.web_map_property.situs'], vintage: ['PAMaps.dbo.web_map_property.prop_val_yr'] },
+    { ids: ['PAMaps.dbo.web_map_property.pacs_prop_id', 'PAMaps.DBO.ParcelFabric_Parcels.PROP_ID', 'PAMaps.dbo.web_map_property.geo_id'], names: ['PAMaps.dbo.web_map_property.dba_name', 'PAMaps.dbo.web_map_property.situs'], vintage: ['PAMaps.dbo.web_map_property.prop_val_yr'], facts: {
+      situsAddress: ['PAMaps.dbo.web_map_property.situs'], propertyUseCode: ['PAMaps.dbo.web_map_property.prop_type_cd'], propertyUseDescription: ['PAMaps.dbo.web_map_property.prop_type_desc'],
+      legalDescription: ['PAMaps.dbo.web_map_property.legal_desc'], subdivision: ['PAMaps.dbo.web_map_property.abs_subdv_cd'], appraisedValue: ['PAMaps.dbo.web_map_property.appraised_val'],
+      taxYear: ['PAMaps.dbo.web_map_property.prop_val_yr'],
+    } },
     source('Bexar Appraisal District public parcel layer', 'https://maps.bcad.org/arcgis/rest/services/PAMapSearch/MapServer/6', 'Live BCAD public parcel service'),
     { bounds: { south: 29.11, west: -98.82, north: 29.77, east: -98.11 } },
   ),
   adapter(
     'collin-cad-parcels', 'TX',
     'https://services2.arcgis.com/uXyoacYrZTPTKD3R/arcgis/rest/services/CCAD_Parcel_Feature_Set/FeatureServer/4',
-    { ids: ['geoID', 'PROP_ID', 'propID'], names: ['dbaName', 'situsConcat', 'legalAbsSubName'], assessorAcres: ['landSizeAcres'], squareFeet: ['landSizeSqft'], vintage: ['dataDate', 'propYear'] },
+    { ids: ['geoID', 'PROP_ID', 'propID'], names: ['dbaName', 'situsConcat', 'legalAbsSubName'], assessorAcres: ['landSizeAcres'], squareFeet: ['landSizeSqft'], vintage: ['dataDate', 'propYear'], facts: {
+      situsAddress: ['situsConcat', 'situsConcatShort'], municipality: ['situsCity'], propertyUseCode: ['propUseCode'], propertyUseDescription: ['propType', 'propSubType'], propertyClass: ['propCategoryCode'],
+      legalDescription: ['legalDescription'], subdivision: ['legalAbsSubName'], marketValue: ['currValMarket'], appraisedValue: ['currValAppraised'], assessedLandValue: ['currValLand'],
+      yearBuilt: ['imprvYearBuilt'], buildingAreaSqFt: ['imprvMainArea'], agriculturalAcres: ['landAgAcres'], taxYear: ['currValYear', 'propYear'],
+    } },
     source('Collin Central Appraisal District parcels', 'https://services2.arcgis.com/uXyoacYrZTPTKD3R/arcgis/rest/services/CCAD_Parcel_Feature_Set/FeatureServer/4', 'Live CCAD parcel service'),
     { bounds: { south: 32.89, west: -96.93, north: 33.47, east: -96.23 } },
   ),
   adapter(
     'williamson-cad-parcels', 'TX',
     'https://services1.arcgis.com/Xff0bbfp6vwIWmlU/arcgis/rest/services/WCAD_Tax_Parcels/FeatureServer/0',
-    { ids: ['PARCELID', 'PropertyID'], names: ['SITEADDRESS', 'PRPRTYDSCRP'], assessorAcres: ['TotAcreDeed', 'AssessedAc', 'StatedAc'], vintage: ['LASTUPDATE'] },
+    { ids: ['PARCELID', 'PropertyID'], names: ['SITEADDRESS', 'PRPRTYDSCRP'], assessorAcres: ['TotAcreDeed', 'AssessedAc', 'StatedAc'], vintage: ['LASTUPDATE'], facts: {
+      situsAddress: ['SITEADDRESS'], propertyUseCode: ['USECD'], propertyUseDescription: ['USEDSCRP'], propertyClass: ['CLASSDSCRP', 'CLASSCD'], legalDescription: ['PRPRTYDSCRP'],
+      assessedLandValue: ['LNDVALUE'], assessedTotalValue: ['CNTASSDVAL'], taxableValue: ['CNTTXBLVAL'], yearBuilt: ['RESYRBLT'], buildingAreaSqFt: ['BLDGAREA'], livingAreaSqFt: ['RESFLRAREA'],
+      waterService: ['WATERSERV'], sewerService: ['SEWERSERV'],
+    } },
     source('Williamson Central Appraisal District tax parcels', 'https://services1.arcgis.com/Xff0bbfp6vwIWmlU/arcgis/rest/services/WCAD_Tax_Parcels/FeatureServer/0', 'Live WCAD parcel service'),
     { bounds: { south: 30.39, west: -98.06, north: 30.91, east: -97.14 } },
   ),
   adapter(
     'montgomery-cad-parcels', 'TX',
     'https://services1.arcgis.com/PRoAPGnMSUqvTrzq/arcgis/rest/services/Tax_Parcel_view/FeatureServer/0',
-    { ids: ['PIN', 'pid'], names: ['situs', 'legalDescription'], vintage: ['pYear'] },
+    { ids: ['PIN', 'pid'], names: ['situs', 'legalDescription'], vintage: ['pYear'], facts: {
+      situsAddress: ['situs'], propertyUseCode: ['stateCd', 'asCode'], propertyClass: ['marketArea'], legalDescription: ['legalDescription'], yearBuilt: ['imprvActualYearBuilt'], buildingAreaSqFt: ['imprvMainArea'], taxYear: ['pYear'],
+    } },
     source('Montgomery County GIS / MCAD Tax Parcel View', 'https://services1.arcgis.com/PRoAPGnMSUqvTrzq/arcgis/rest/services/Tax_Parcel_view/FeatureServer/0', 'Live authoritative MCAD parcel view'),
     { bounds: { south: 30.01, west: -95.87, north: 30.64, east: -95.07 } },
   ),
   adapter(
     'tarrant-appraisal-parcels', 'TX',
     'https://services3.arcgis.com/9GbPfrQRyZbRsXU4/arcgis/rest/services/Basemap_Layer/FeatureServer/113',
-    { ids: ['TAXPIN', 'Account_Nu', 'PIDN'], names: ['Situs_Addr'], assessorAcres: ['ACRES', 'Land_Acres'], squareFeet: ['Land_SqFt'], vintage: ['Notice_Dat', 'last_edited_date'] },
+    { ids: ['TAXPIN', 'Account_Nu', 'PIDN'], names: ['Situs_Addr'], assessorAcres: ['ACRES', 'Land_Acres'], squareFeet: ['Land_SqFt'], vintage: ['Notice_Dat', 'last_edited_date'], facts: {
+      situsAddress: ['Situs_Addr'], municipality: ['City'], county: ['County'], propertyUseCode: ['State_Use_'], propertyClass: ['Property_C'], legalDescription: ['LegalDescr'],
+      marketValue: ['Total_Valu', 'Appraisal1'], appraisedValue: ['Appraised_', 'Appraisal_'], assessedLandValue: ['Land_Value'], assessedImprovementValue: ['Improvemen'],
+      lastSaleDate: ['Deed_Date'], yearBuilt: ['Year_Built'], livingAreaSqFt: ['Living_Are'], agriculturalAcres: ['Ag_Acres'], recordUrl: ['GIS_Link'],
+    } },
     source('Tarrant Appraisal District parcel layer hosted by City of Bedford', 'https://services3.arcgis.com/9GbPfrQRyZbRsXU4/arcgis/rest/services/Basemap_Layer/FeatureServer/113', 'Live Tarrant parcel layer', PARTIAL_STATE_NOTE),
     { bounds: { south: 32.49, west: -97.61, north: 33.06, east: -97.0 } },
   ),
@@ -142,13 +174,22 @@ const parcelAdapters: ParcelAdapter[] = [
     { ids: ['parcel_id', 'account'], names: ['situsAdd', 'subName'], assessorAcres: ['landAcres'], squareFeet: ['landSqft'], vintage: ['dateReceived'] },
     source('Colorado Public Parcel Composite', 'https://gis.colorado.gov/public/rest/services/Address_and_Parcel/Colorado_Public_Parcels/FeatureServer/0', 'Live Colorado county composite', PARTIAL_STATE_NOTE), { timeoutMs: 12_000, attempts: 1 }),
   adapter('connecticut-cama-parcels', 'CT', 'https://services3.arcgis.com/3FL1kr7L4LvwA2Kb/arcgis/rest/services/Connecticut_CAMA_and_Parcel_Layer/FeatureServer/0',
-    { ids: ['Parcel_ID'], names: ['Full_Address', 'Location'], assessorAcres: ['Land_Acres'], vintage: ['Collection_year', 'Valuation_Year'] },
+    { ids: ['Parcel_ID'], names: ['Full_Address', 'Location'], assessorAcres: ['Land_Acres'], vintage: ['Collection_year', 'Valuation_Year'], facts: {
+      situsAddress: ['Full_Address', 'Location_1', 'Location'], municipality: ['Property_City', 'Town_Name'], propertyUseCode: ['State_Use'], propertyUseDescription: ['State_Use_Description'], zoning: ['Zone'],
+      assessedTotalValue: ['Assessed_Total'], assessedLandValue: ['Assessed_Land'], assessedImprovementValue: ['Assessed_Building'],
+      appraisedValue: { sum: ['Appraised_Land', 'Appraised_Building', 'Appraised_Outbuilding'] }, lastSalePrice: ['Sale_Price'], lastSaleDate: ['Sale_Date'],
+      yearBuilt: ['EYB', 'AYB'], livingAreaSqFt: ['Living_Area'], buildingAreaSqFt: ['Effective_Area'], taxYear: ['Valuation_Year'], recordUrl: ['CAMA_Link', 'Link', 'link_1'],
+    } },
     source('Connecticut CAMA and Parcel Layer', 'https://services3.arcgis.com/3FL1kr7L4LvwA2Kb/arcgis/rest/services/Connecticut_CAMA_and_Parcel_Layer/FeatureServer/0', 'Statewide CAMA/parcel compilation', PARTIAL_STATE_NOTE)),
   adapter('delaware-state-parcels', 'DE', 'https://enterprise.firstmap.delaware.gov/arcgis/rest/services/PlanningCadastre/DE_StateParcels/FeatureServer/0',
     { ids: ['PIN'], names: [], assessorAcres: ['ACRES'], vintage: ['UPDATED'] },
     source('Delaware FirstMap State Parcels', 'https://enterprise.firstmap.delaware.gov/arcgis/rest/services/PlanningCadastre/DE_StateParcels/FeatureServer/0', 'Live Delaware FirstMap service')),
   adapter('florida-statewide-cadastral', 'FL', 'https://services9.arcgis.com/Gh9awoU677aKree0/arcgis/rest/services/Florida_Statewide_Cadastral/FeatureServer/0',
-    { ids: ['PARCEL_ID', 'PARCELNO', 'ALT_KEY'], names: [['PHY_ADDR1', 'PHY_ADDR2', 'PHY_CITY']], squareFeet: ['LND_SQFOOT'], vintage: ['ASMNT_YR', 'DT_LAST_IN'] },
+    { ids: ['PARCEL_ID', 'PARCELNO', 'ALT_KEY'], names: [['PHY_ADDR1', 'PHY_ADDR2', 'PHY_CITY']], squareFeet: ['LND_SQFOOT'], vintage: ['ASMNT_YR', 'DT_LAST_IN'], facts: {
+      situsAddress: { join: ['PHY_ADDR1', 'PHY_ADDR2'] }, municipality: ['PHY_CITY'], propertyUseCode: ['DOR_UC', 'PA_UC'], legalDescription: ['S_LEGAL'],
+      marketValue: ['JV'], assessedLandValue: ['LND_VAL'], lastSalePrice: ['SALE_PRC1'], lastSaleYear: ['SALE_YR1'], lastSaleMonth: ['SALE_MO1'],
+      yearBuilt: ['EFF_YR_BLT', 'ACT_YR_BLT'], buildingCount: ['NO_BULDNG'], livingAreaSqFt: ['TOT_LVG_AR'], taxYear: ['ASMNT_YR'],
+    } },
     source('Florida Department of Revenue Statewide Cadastral', 'https://services9.arcgis.com/Gh9awoU677aKree0/arcgis/rest/services/Florida_Statewide_Cadastral/FeatureServer/0', '2025 statewide cadastral export', PARTIAL_STATE_NOTE), { timeoutMs: 12_000 }),
   adapter('hawaii-statewide-tmk', 'HI', 'https://geodata.hawaii.gov/arcgis/rest/services/ParcelsZoning/MapServer/25',
     { ids: ['tmk_txt', 'tmk', 'cty_tmk'], names: [], mappedAcres: ['gisacres'] },
@@ -169,7 +210,11 @@ const parcelAdapters: ParcelAdapter[] = [
     { ids: ['state_pin', 'county_pin'], names: ['landmark', 'plat_name'], assessorAcres: ['acres_deed'], mappedAcres: ['acres_poly'], vintage: ['tax_year', 'edit_date'] },
     source('Minnesota Geospatial Commons Opt-In Open Parcels', 'https://utility.arcgis.com/usrsvcs/servers/1627519e8d3f42bcb55532d48e9a61e5/rest/services/OpenParcels/plan_parcels_open/MapServer/0', 'Live opt-in Minnesota parcel compilation', PARTIAL_STATE_NOTE)),
   adapter('montana-cadastral-framework', 'MT', 'https://services.arcgis.com/qnjIrwR8z5Izc0ij/arcgis/rest/services/Montana_Cadastral_Framework/FeatureServer/1',
-    { ids: ['PARCELID', 'PropertyID', 'AssessmentCode'], names: ['AddressLine1', 'Subdivision'], assessorAcres: ['TotalAcres'], mappedAcres: ['GISAcres'], vintage: ['TaxYear'] },
+    { ids: ['PARCELID', 'PropertyID', 'AssessmentCode'], names: ['AddressLine1', 'Subdivision'], assessorAcres: ['TotalAcres'], mappedAcres: ['GISAcres'], vintage: ['TaxYear'], facts: {
+      situsAddress: { join: ['AddressLine1', 'AddressLine2', 'CityStateZip'] }, county: ['CountyName'], propertyClass: ['PropType'], legalDescription: ['LegalDescriptionShort'], subdivision: ['Subdivision'],
+      marketValue: ['TotalValue'], assessedLandValue: ['TotalLandValue'], assessedImprovementValue: ['TotalBuildingValue'], taxYear: ['TaxYear'],
+      croplandAcres: { sum: ['ContinuousCropAcres', 'FallowAcres'] }, agriculturalAcres: ['FarmsiteAcres'], forestAcres: ['ForestAcres'], grazingAcres: ['GrazingAcres'], irrigatedAcres: ['IrrigatedAcres'], accessDescription: ['PropAccess'],
+    } },
     source('Montana State Library Cadastral Framework', 'https://services.arcgis.com/qnjIrwR8z5Izc0ij/arcgis/rest/services/Montana_Cadastral_Framework/FeatureServer/1', 'Live Montana cadastral service')),
   adapter('nevada-statewide-parcels', 'NV', 'https://arcgis.water.nv.gov/arcgis/rest/services/BaseLayers/County_Parcels_in_Nevada/MapServer/0',
     { ids: ['APN', 'PIN'], names: ['SiteCity'], assessorAcres: ['Acres'], vintage: ['SourceDate'] },
@@ -184,7 +229,11 @@ const parcelAdapters: ParcelAdapter[] = [
     { ids: ['PAMS_PIN', 'GIS_PIN'], names: ['FAC_NAME', 'PROP_LOC'], mappedAcres: ['CALC_ACRE'], vintage: ['PCLLASTUPD', 'PCL_PBDATE'] },
     source('NJ Office of GIS Parcels and MOD-IV Composite', 'https://services2.arcgis.com/XVOqAjTOJ5P6ngMu/arcgis/rest/services/Parcels_Composite_NJ_WM/FeatureServer/0', 'Live New Jersey parcel composite', PARTIAL_STATE_NOTE)),
   adapter('new-york-public-tax-parcels', 'NY', 'https://services6.arcgis.com/EbVsqZ18sv1kVJ3k/arcgis/rest/services/NYS_Tax_Parcels_Public/FeatureServer/1',
-    { ids: ['SWIS_PRINT_KEY_ID', 'MUNI_PARCEL_ID', 'SBL'], names: ['PARCEL_ADDR'], assessorAcres: ['ACRES'], mappedAcres: ['CALC_ACRES'], squareFeet: ['SQ_FT'], vintage: ['ROLL_YR', 'SPATIAL_YR'] },
+    { ids: ['SWIS_PRINT_KEY_ID', 'MUNI_PARCEL_ID', 'SBL'], names: ['PARCEL_ADDR'], assessorAcres: ['ACRES'], mappedAcres: ['CALC_ACRES'], squareFeet: ['SQ_FT'], vintage: ['ROLL_YR', 'SPATIAL_YR'], facts: {
+      situsAddress: ['PARCEL_ADDR'], county: ['COUNTY_NAME'], municipality: ['MUNI_NAME', 'CITYTOWN_NAME'], propertyUseCode: ['PROP_CLASS', 'USED_AS_CODE'], propertyUseDescription: ['USED_AS_DESC'], buildingDescription: ['BLDG_STYLE_DESC'],
+      marketValue: ['FULL_MARKET_VAL'], assessedTotalValue: ['TOTAL_AV'], assessedLandValue: ['LAND_AV'], yearBuilt: ['YR_BLT'], buildingAreaSqFt: ['GFA'], livingAreaSqFt: ['SQFT_LIVING'],
+      frontageFeet: ['FRONT'], depthFeet: ['DEPTH'], waterService: ['WATER_DESC', 'WATER_SUPPLY'], sewerService: ['SEWER_DESC', 'SEWER_TYPE'], utilities: ['UTILITIES_DESC', 'UTILITIES'], taxYear: ['ROLL_YR'],
+    } },
     source('New York State GIS Public Tax Parcels', 'https://services6.arcgis.com/EbVsqZ18sv1kVJ3k/arcgis/rest/services/NYS_Tax_Parcels_Public/FeatureServer/1', 'Live public NYS tax parcel compilation', PARTIAL_STATE_NOTE)),
   adapter('north-carolina-one-map-parcels', 'NC', 'https://services.nconemap.gov/secure/rest/services/NC1Map_Parcels/MapServer/1',
     { ids: ['parno', 'altparno', 'nparno'], names: ['siteadd'], mappedAcres: ['gisacres'], vintage: ['revisedate', 'sourcedate'] },
@@ -307,7 +356,7 @@ const parcelAdapters: ParcelAdapter[] = [
 
   // South Carolina — York County
   adapter('south-carolina-york-county-parcels', 'SC', 'https://services1.arcgis.com/2AGLxyiJoNiVHKwq/arcgis/rest/services/Parcels/FeatureServer/0',
-    { ids: ['TAXMAPID', 'ParcelID', 'AprAccNum'], names: ['MailAddr1'] },
+    { ids: ['TAXMAPID', 'ParcelID', 'AprAccNum'], names: [] },
     source('York County South Carolina public parcels', 'https://services1.arcgis.com/2AGLxyiJoNiVHKwq/arcgis/rest/services/Parcels/FeatureServer/0', 'Live York County SC parcel service', PARTIAL_STATE_NOTE),
     { bounds: { south: 34.80, west: -81.65, north: 35.20, east: -80.80 } }),
 
@@ -319,7 +368,7 @@ const parcelAdapters: ParcelAdapter[] = [
 
   // Wyoming — statewide parcels (Wyoming State Lands / OSLISDE)
   adapter('wyoming-statewide-parcels-2025', 'WY', 'https://gis2.statelands.wyo.gov/arcgis/rest/services/oslisde/Parcels2025/MapServer/0',
-    { ids: ['parcelnb', 'accountno'], names: ['jurisdicti', 'ownername1'] },
+    { ids: ['parcelnb', 'accountno'], names: ['jurisdicti'] },
     source('Wyoming State Lands and Investments Board 2025 parcels', 'https://gis2.statelands.wyo.gov/arcgis/rest/services/oslisde/Parcels2025/MapServer/0', '2025 statewide Wyoming parcel service', PARTIAL_STATE_NOTE), { timeoutMs: 12_000 }),
 ]
 
@@ -461,13 +510,14 @@ async function queryAdapter(candidate: ParcelAdapter, coordinates: Coordinates, 
   const acres = assessorAcres || mappedFieldAcres || (squareFeet ? squareFeet / 43_560 : undefined) || geometryAcres
   const acreageKind = assessorAcres ? 'assessor' as const : acres ? 'mapped' as const : undefined
   const vintageValue = firstText(properties, candidate.fields.vintage || [])
+  const facts = normalizeParcelFacts(properties, candidate.fields.facts)
   const provenance = vintageValue
     ? { ...candidate.provenance, vintage: `${candidate.provenance.vintage}; record ${vintageValue}` }
     : candidate.provenance
 
   return {
     status: 'found', message: 'Official parcel matched at the selected point.',
-    id, name: cleanParcelName(nameSource, id), acres, acreageKind,
+    id, name: cleanParcelName(nameSource, id), acres, acreageKind, facts,
     provenance, boundary: feature.geometry,
   }
 }
@@ -480,6 +530,16 @@ export function formatParcelAcres(acres: number) {
 export function getParcelCoverage() {
   const states = Array.from(new Set(parcelAdapters.map((candidate) => candidate.stateCode))).sort()
   return { states, adapterCount: parcelAdapters.length }
+}
+
+export function getParcelProviderContracts() {
+  return parcelAdapters.map((candidate) => ({
+    id: candidate.id,
+    stateCode: candidate.stateCode,
+    queryUrl: candidate.queryUrl,
+    outFields: candidate.outFields.split(',').filter(Boolean),
+    factFields: getParcelFactFieldNames(candidate.fields.facts),
+  }))
 }
 
 export async function fetchParcelAt(coordinates: Coordinates, stateCode: string, signal?: AbortSignal): Promise<ParcelSelection> {

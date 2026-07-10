@@ -4,6 +4,7 @@ import L from 'leaflet'
 import { GeoJSON, MapContainer, Marker, TileLayer, useMap } from 'react-leaflet'
 import { getStateDefinition } from '../data/states'
 import type { HardGate, SavedSite, ScreeningArea } from '../types/site'
+import { ParcelFactsPanel } from './ParcelFactsPanel'
 
 const reportIcon = L.divIcon({ className: 'landlens-marker-wrap', html: '<div class="landlens-marker"><span></span></div>', iconSize: [38, 46], iconAnchor: [19, 43] })
 
@@ -40,6 +41,10 @@ export function SiteReport({ site, onBack }: { site: SavedSite; onBack: () => vo
   const parcelBoundary = site.screeningArea?.kind === 'parcel' ? site.screeningArea.boundary : undefined
   const parcelFeature = parcelBoundary ? { type: 'Feature' as const, properties: {}, geometry: parcelBoundary } : undefined
   const triggeredGates = analysis.hardGates.filter((gate) => gate.triggered)
+  const hasParcelFacts = Boolean(site.parcel?.facts)
+  const suppliedNumber = hasParcelFacts ? '04' : '03'
+  const checklistNumber = hasParcelFacts ? '05' : '04'
+  const researchNumber = hasParcelFacts ? '06' : '05'
   return (
     <main className="report-page">
       <div className="report-toolbar no-print">
@@ -87,21 +92,27 @@ export function SiteReport({ site, onBack }: { site: SavedSite; onBack: () => vo
             <Finding title="Unknowns" icon={<CircleHelp />} items={analysis.unknowns} tone="unknown" />
           </div>
         </section>
+        {hasParcelFacts && (
+          <section className="report-section report-parcel-facts">
+            <div className="report-section-title"><span>03</span><div><h2>Official parcel facts</h2><p>Normalized public assessor and cadastral attributes saved with this screening.</p></div></div>
+            <ParcelFactsPanel facts={site.parcel?.facts} provenance={site.parcel?.provenance} showHeading={false} />
+          </section>
+        )}
         <section className="report-section report-site-facts">
-          <div className="report-section-title"><span>03</span><div><h2>Site facts supplied</h2><p>These entries have not been independently verified.</p></div></div>
+          <div className="report-section-title"><span>{suppliedNumber}</span><div><h2>Site facts supplied</h2><p>These entries have not been independently verified.</p></div></div>
           <dl>
             <div><dt>Acres</dt><dd>{inputs.acres || 'Unknown'}</dd></div><div><dt>Estimated price</dt><dd>{inputs.estimatedPrice ? `$${Number(inputs.estimatedPrice).toLocaleString()}` : 'Unknown'}</dd></div><div><dt>Intended use</dt><dd>{inputs.intendedUse.replace('-', ' ')}</dd></div><div><dt>Road frontage</dt><dd>{inputs.roadFrontage}</dd></div><div><dt>Utilities nearby</dt><dd>{inputs.utilitiesNearby}</dd></div><div><dt>Data confidence</dt><dd>{analysis.confidence}%</dd></div>
           </dl>
           <div className="report-notes"><div><strong>Zoning notes</strong><p>{inputs.zoningNotes || 'Zoning not verified.'}</p></div><div><strong>Personal notes</strong><p>{inputs.notes || 'No personal notes entered.'}</p></div></div>
         </section>
         <section className="report-section">
-          <div className="report-section-title"><span>04</span><div><h2>Recommended manual diligence checklist</h2><p>The lowest-regret diligence package for any shortlisted parcel.</p></div></div>
+          <div className="report-section-title"><span>{checklistNumber}</span><div><h2>Recommended manual diligence checklist</h2><p>The lowest-regret diligence package for any shortlisted parcel.</p></div></div>
           <ul className="diligence-checklist">
             {DILIGENCE_CHECKLIST.map((item) => <li key={item.title}><ClipboardCheck size={14} /><div><strong>{item.title}</strong><span>{item.detail}</span></div></li>)}
           </ul>
         </section>
         <section className="report-section">
-          <div className="report-section-title"><span>05</span><div><h2>Recommended next research</h2><p>Resolve the highest-impact unknowns before making a land decision.</p></div></div>
+          <div className="report-section-title"><span>{researchNumber}</span><div><h2>Recommended next research</h2><p>Resolve the highest-impact unknowns before making a land decision.</p></div></div>
           <ol className="next-steps">{analysis.nextSteps.map((step) => <li key={step}>{step}</li>)}</ol>
         </section>
         <footer className="report-footer"><FileDown size={18} /><p><strong>Important:</strong> This is a preliminary point-screening report based on public-source and user-supplied information. It is not a parcel-wide development, investment, engineering, environmental, legal, or zoning decision.</p></footer>

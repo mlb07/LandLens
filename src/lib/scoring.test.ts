@@ -4,6 +4,7 @@ import { EMPTY_SITE_INPUTS } from '../types/site'
 import type { OfficialSiteData } from '../data/officialDataProvider'
 import type { ParcelOverlayData } from '../data/parcelOverlayProvider'
 import type { RegionalHazardData } from '../data/regionalHazardProvider'
+import type { ParcelSelection } from '../types/site'
 
 const COORDS = { lat: 30.27, lng: -97.74 }
 const GOOD_INPUTS = { ...EMPTY_SITE_INPUTS, acres: '10', roadFrontage: 'yes' as const, utilitiesNearby: 'yes' as const, zoningNotes: 'by-right permitted', location: 'Austin, TX' }
@@ -289,6 +290,61 @@ describe('analyzeSite — intended-use market weighting', () => {
     const demoOnly = analyzeSite(COORDS, { ...GOOD_INPUTS, intendedUse: 'commercial' }, { ...fullOfficial, bps: { available: false, provenance: { source: 'Census', sourceUrl: 'x' } } })
     expect(demoOnly.metrics.market.score).not.toBeNull()
     expect(demoOnly.metrics.market.displayValue).toContain('pop')
+  })
+})
+
+describe('analyzeSite — official parcel facts', () => {
+  const parcel: ParcelSelection = {
+    status: 'found', message: 'matched', id: 'P-1', facts: {
+      zoning: 'CS', municipality: 'Austin', waterService: 'Austin Water', sewerService: 'City sewer', frontageFeet: 125,
+    },
+    provenance: { source: 'County assessor', sourceUrl: 'https://example.gov' },
+  }
+  const unavailableOfficial: OfficialSiteData = {
+    ...fullOfficial,
+    road: { available: false, provenance: { source: 'Census', sourceUrl: 'x' }, error: 'offline' },
+    utilityService: { available: false, provenance: { source: 'EPA', sourceUrl: 'x' }, error: 'offline' },
+    zoning: undefined,
+    localUtility: undefined,
+  }
+
+  it('uses mapped parcel zoning when no local zoning adapter returns data', () => {
+    const result = analyzeSite(COORDS, { ...EMPTY_SITE_INPUTS, intendedUse: 'commercial' }, unavailableOfficial, true, null, null, parcel)
+    expect(result.metrics.zoning.status).toBe('official')
+    expect(result.metrics.zoning.displayValue).toContain('CS')
+  })
+
+  it('does not penalize an unfamiliar local zoning code as incompatible', () => {
+    const localCodeParcel = { ...parcel, facts: { ...parcel.facts, zoning: 'R-40' } }
+    const result = analyzeSite(COORDS, { ...EMPTY_SITE_INPUTS, intendedUse: 'commercial' }, unavailableOfficial, true, null, null, localCodeParcel)
+    expect(result.metrics.zoning.score).toBe(58)
+    expect(result.metrics.zoning.summary).toContain('does not interpret automatically')
+  })
+
+  it('uses parcel water/sewer descriptors without treating them as capacity commitments', () => {
+    const result = analyzeSite(COORDS, EMPTY_SITE_INPUTS, unavailableOfficial, true, null, null, parcel)
+    expect(result.metrics.utilities.status).toBe('official')
+    expect(result.metrics.utilities.displayValue).toContain('Austin Water')
+    expect(result.metrics.utilities.detail).toContain('do not prove capacity')
+  })
+
+  it('treats a partially unavailable parcel utility record as partial evidence', () => {
+    const partialParcel = { ...parcel, facts: { waterService: 'City Water', sewerService: 'None' } }
+    const result = analyzeSite(COORDS, EMPTY_SITE_INPUTS, unavailableOfficial, true, null, null, partialParcel)
+    expect(result.metrics.utilities.score).toBe(55)
+    expect(result.metrics.utilities.summary).toContain('partial utility-service path')
+  })
+
+  it('uses assessor frontage as screening evidence but not proof of legal access', () => {
+    const result = analyzeSite(COORDS, EMPTY_SITE_INPUTS, unavailableOfficial, true, null, null, parcel)
+    expect(result.metrics.access.displayValue).toContain('125 ft')
+    expect(result.metrics.access.detail).toContain('not proof of deeded access')
+  })
+
+  it('does not let mapped frontage override a user-reported lack of frontage', () => {
+    const result = analyzeSite(COORDS, { ...EMPTY_SITE_INPUTS, roadFrontage: 'no' }, fullOfficial, true, null, null, parcel)
+    expect(result.metrics.access.score).toBe(22)
+    expect(result.gatedToManual).toBe(true)
   })
 })
 

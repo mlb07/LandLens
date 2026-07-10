@@ -1,5 +1,6 @@
 import { BadgeCheck, Calculator, ChevronDown, Info, MapPinned } from 'lucide-react'
 import type { IntendedUse, ParcelSelection, SiteInputs, TriState } from '../types/site'
+import { ParcelFactsPanel } from './ParcelFactsPanel'
 
 const intendedUses: Array<{ value: IntendedUse; label: string }> = [
   { value: 'residential', label: 'Residential' },
@@ -44,6 +45,8 @@ export function SiteForm({ inputs, parcel, onChange, onAnalyze, dirty }: {
       </div>
 
       {parcel?.status === 'found' && <div className="parcel-autofill-note"><BadgeCheck size={15} /><div><strong>Official parcel match</strong><span>{parcel.acreageKind === 'assessor' ? 'Name and acreage came from official parcel attributes.' : 'Name came from the parcel record when available; mapped acreage was calculated from the returned official boundary.'} Review before relying on them.</span></div></div>}
+
+      {parcel?.status === 'found' && <ParcelFactsPanel facts={parcel.facts} provenance={parcel.provenance} />}
 
       <div className="form-grid">
         <label className="field field-full">

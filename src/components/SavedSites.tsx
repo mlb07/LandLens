@@ -16,6 +16,12 @@ function metricOf(site: SavedSite, category: ScoreCategory): MetricResult | unde
   return site.analysis?.metrics?.[category]
 }
 
+function parcelValue(site: SavedSite): string {
+  const facts = site.parcel?.facts
+  const value = facts?.marketValue ?? facts?.appraisedValue ?? facts?.assessedTotalValue
+  return value ? `$${Math.round(value).toLocaleString()}` : '—'
+}
+
 export function SavedSites({ sites, onOpen, onReport, onDelete, onExplore }: {
   sites: SavedSite[]
   onOpen: (site: SavedSite) => void
@@ -42,7 +48,7 @@ export function SavedSites({ sites, onOpen, onReport, onDelete, onExplore }: {
               <tbody>
                 {sites.map((site) => (
                   <tr key={site.id}>
-                    <td><button className="site-name-cell" onClick={() => onOpen(site)}><strong>{site.inputs.name || 'Untitled site'}</strong><span><MapPin size={12} />{site.inputs.location || `${site.coordinates.lat.toFixed(3)}, ${site.coordinates.lng.toFixed(3)}`}</span></button></td>
+                    <td><button className="site-name-cell" onClick={() => onOpen(site)}><strong>{site.inputs.name || 'Untitled site'}</strong><span><MapPin size={12} />{site.inputs.location || `${site.coordinates.lat.toFixed(3)}, ${site.coordinates.lng.toFixed(3)}`}</span>{site.parcel?.facts && <em>{Object.keys(site.parcel.facts).filter((key) => key !== 'recordUrl').length} parcel facts</em>}</button></td>
                     {COMPARISON_COLUMNS.map((col) => {
                       const metric = metricOf(site, col.category)
                       return <td key={col.category}><MetricCell score={metric?.score ?? null} label={metric?.displayValue} /></td>
@@ -59,7 +65,7 @@ export function SavedSites({ sites, onOpen, onReport, onDelete, onExplore }: {
             {sites.map((site) => (
               <article className="saved-site-card" key={site.id}>
                 <div><span className={`table-score ${site.analysis.verdictTone}`}>{site.analysis.finalScore ?? '—'}</span><div><h3>{site.inputs.name || 'Untitled site'}</h3><p>{site.inputs.location || `${site.coordinates.lat.toFixed(3)}, ${site.coordinates.lng.toFixed(3)}`}</p></div></div>
-                <dl><div><dt>Acres</dt><dd>{site.inputs.acres || '—'}</dd></div><div><dt>Flood</dt><dd>{metricOf(site, 'floodplain')?.displayValue ?? '—'}</dd></div><div><dt>Verdict</dt><dd>{site.analysis.verdict}</dd></div></dl>
+                <dl><div><dt>Acres</dt><dd>{site.inputs.acres || '—'}</dd></div><div><dt>Parcel value</dt><dd>{parcelValue(site)}</dd></div><div><dt>Verdict</dt><dd>{site.analysis.verdict}</dd></div></dl>
                 <div className="card-actions"><button onClick={() => onOpen(site)}>Open</button><button onClick={() => onReport(site)}>Report</button><button className="danger" onClick={() => onDelete(site.id)}>Delete</button></div>
               </article>
             ))}

@@ -95,8 +95,55 @@ export interface SavedSite {
   inputs: SiteInputs
   analysis: SiteAnalysis
   screeningArea?: ScreeningArea
+  parcel?: ParcelSnapshot
   createdAt: string
   updatedAt: string
+}
+
+export interface ParcelFacts {
+  situsAddress?: string
+  county?: string
+  municipality?: string
+  propertyUseCode?: string
+  propertyUseDescription?: string
+  propertyClass?: string
+  zoning?: string
+  legalDescription?: string
+  subdivision?: string
+  marketValue?: number
+  appraisedValue?: number
+  assessedTotalValue?: number
+  assessedLandValue?: number
+  assessedImprovementValue?: number
+  taxableValue?: number
+  lastSalePrice?: number
+  lastSaleDate?: string
+  taxYear?: string
+  yearBuilt?: number
+  buildingDescription?: string
+  buildingCount?: number
+  buildingAreaSqFt?: number
+  livingAreaSqFt?: number
+  frontageFeet?: number
+  depthFeet?: number
+  waterService?: string
+  sewerService?: string
+  utilities?: string
+  accessDescription?: string
+  agriculturalAcres?: number
+  croplandAcres?: number
+  forestAcres?: number
+  grazingAcres?: number
+  irrigatedAcres?: number
+  recordUrl?: string
+}
+
+export interface ParcelSnapshot {
+  id: string
+  acres?: number
+  acreageKind?: 'assessor' | 'mapped'
+  facts?: ParcelFacts
+  provenance?: DataProvenance
 }
 
 export interface ScreeningArea {
@@ -115,6 +162,7 @@ export interface ParcelSelection {
   name?: string
   acres?: number
   acreageKind?: 'assessor' | 'mapped'
+  facts?: ParcelFacts
   boundary?: ScreeningArea['boundary']
   provenance?: DataProvenance
 }
