@@ -5,6 +5,7 @@ import type { OfficialSiteData } from '../data/officialDataProvider'
 import type { ParcelOverlayData } from '../data/parcelOverlayProvider'
 import type { RegionalHazardData } from '../data/regionalHazardProvider'
 import type { ParcelSelection } from '../types/site'
+import { buildAustinJurisdictionProfile } from '../data/austinJurisdiction'
 
 const COORDS = { lat: 30.27, lng: -97.74 }
 const GOOD_INPUTS = { ...EMPTY_SITE_INPUTS, acres: '10', roadFrontage: 'yes' as const, utilitiesNearby: 'yes' as const, zoningNotes: 'by-right permitted', location: 'Austin, TX' }
@@ -105,6 +106,71 @@ describe('analyzeSite — hard gates', () => {
 })
 
 describe('analyzeSite — zoning regex', () => {
+  it('uses the Austin jurisdiction profile for a conservative district-family screen', () => {
+    const profile = buildAustinJurisdictionProfile({
+      zoningCode: 'SF-3-NP', baseDistrict: 'SF-3', jurisdictionCode: 'FULL', jurisdictionLabel: 'FULL PURPOSE',
+      overlays: [{ name: 'Residential Design Standards', layerId: 22 }],
+    })
+    const official: OfficialSiteData = {
+      ...fullOfficial,
+      zoning: { available: true, value: { zoningCode: 'SF-3-NP', baseDistrict: 'SF-3', jurisdiction: 'FULL PURPOSE', profile }, provenance: { source: 'City of Austin', sourceUrl: 'x' } },
+    }
+    const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: '', intendedUse: 'residential' }, official)
+    expect(result.metrics.zoning.status).toBe('official')
+    expect(result.metrics.zoning.score).toBe(70)
+    expect(result.metrics.zoning.detail).toContain('Austin profile')
+    expect(result.redFlags.some((flag) => flag.includes('Austin zoning overlay'))).toBe(true)
+    expect(result.unknowns).not.toContain('Zoning and future land use have not been verified.')
+  })
+
+  it('does not turn a coarse Austin family conflict into a legal hard gate', () => {
+    const profile = buildAustinJurisdictionProfile({ zoningCode: 'SF-3', baseDistrict: 'SF-3', jurisdictionCode: 'FULL' })
+    const official: OfficialSiteData = {
+      ...fullOfficial,
+      zoning: { available: true, value: { zoningCode: 'SF-3', baseDistrict: 'SF-3', jurisdiction: 'FULL PURPOSE', profile }, provenance: { source: 'City of Austin', sourceUrl: 'x' } },
+    }
+    const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: '', intendedUse: 'industrial' }, official)
+    expect(result.metrics.zoning.score).toBe(28)
+    expect(result.redFlags.some((flag) => flag.includes('likely conflict'))).toBe(true)
+    expect(result.hardGates.find((gate) => gate.id === 'use-permitted')?.triggered).toBe(false)
+  })
+
+  it('scores a §25-2-491 permitted proposed use with combining-district review', () => {
+    const profile = buildAustinJurisdictionProfile({ zoningCode: 'SF-3-NP', baseDistrict: 'SF', jurisdictionCode: 'FULL' })
+    const official: OfficialSiteData = {
+      ...fullOfficial,
+      zoning: { available: true, value: { zoningCode: 'SF-3-NP', baseDistrict: 'SF-3', jurisdiction: 'FULL PURPOSE', profile }, provenance: { source: 'City of Austin', sourceUrl: 'x' } },
+    }
+    const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: '', proposedUse: 'single_family' }, official)
+    expect(result.metrics.zoning.score).toBe(74)
+    expect(result.metrics.zoning.summary).toContain('listed as permitted')
+    expect(result.strengths.some((strength) => strength.includes('base-use table'))).toBe(true)
+  })
+
+  it('hard-gates an exact use that the base table does not permit', () => {
+    const profile = buildAustinJurisdictionProfile({ zoningCode: 'SF-3-NP', baseDistrict: 'SF', jurisdictionCode: 'FULL' })
+    const official: OfficialSiteData = {
+      ...fullOfficial,
+      zoning: { available: true, value: { zoningCode: 'SF-3-NP', baseDistrict: 'SF-3', jurisdiction: 'FULL PURPOSE', profile }, provenance: { source: 'City of Austin', sourceUrl: 'x' } },
+    }
+    const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: '', proposedUse: 'multifamily' }, official)
+    expect(result.metrics.zoning.score).toBe(12)
+    expect(result.hardGates.find((gate) => gate.id === 'use-permitted')?.triggered).toBe(true)
+    expect(result.redFlags.some((flag) => flag.includes('not permitted'))).toBe(true)
+  })
+
+  it('routes a prohibited base cell with MU combining zoning to special review', () => {
+    const profile = buildAustinJurisdictionProfile({ zoningCode: 'SF-3-MU-CO-NP', baseDistrict: 'SF', jurisdictionCode: 'FULL' })
+    const official: OfficialSiteData = {
+      ...fullOfficial,
+      zoning: { available: true, value: { zoningCode: 'SF-3-MU-CO-NP', baseDistrict: 'SF-3', jurisdiction: 'FULL PURPOSE', profile }, provenance: { source: 'City of Austin', sourceUrl: 'x' } },
+    }
+    const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: '', intendedUse: 'commercial', proposedUse: 'restaurant_general' }, official)
+    expect(result.metrics.zoning.score).toBe(44)
+    expect(result.hardGates.find((gate) => gate.id === 'use-permitted')?.triggered).toBe(false)
+    expect(result.redFlags.some((flag) => flag.includes('combining-district review'))).toBe(true)
+  })
+
   it('detects "prohibited"', () => {
     const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: 'prohibited use' }, fullOfficial)
     expect(result.metrics.zoning.score).toBeLessThanOrEqual(20)
@@ -156,6 +222,15 @@ describe('analyzeSite — parcel overlays', () => {
     const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, goodOverlays)
     expect(result.metrics.netDevelopable.status).toBe('official')
     expect(result.metrics.netDevelopable.displayValue).toContain('net /')
+  })
+
+  it('identifies jurisdiction-code setbacks in net developable detail', () => {
+    const localOverlays: ParcelOverlayData = {
+      ...goodOverlays,
+      setback: { ...goodOverlays.setback, value: { ...goodOverlays.setback.value!, standardsSource: 'jurisdiction-code' } },
+    }
+    const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, localOverlays)
+    expect(result.metrics.netDevelopable.detail).toContain('mapped jurisdiction base-district distances')
   })
 
   it('triggers floodway gate from overlay floodway', () => {

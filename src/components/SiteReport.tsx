@@ -5,6 +5,8 @@ import { GeoJSON, MapContainer, Marker, TileLayer, useMap } from 'react-leaflet'
 import { getStateDefinition } from '../data/states'
 import type { HardGate, SavedSite, ScreeningArea } from '../types/site'
 import { ParcelFactsPanel } from './ParcelFactsPanel'
+import { JurisdictionPanel } from './JurisdictionPanel'
+import { getAustinProposedUseDefinition } from '../data/austinPermittedUses'
 
 const reportIcon = L.divIcon({ className: 'landlens-marker-wrap', html: '<div class="landlens-marker"><span></span></div>', iconSize: [38, 46], iconAnchor: [19, 43] })
 
@@ -42,9 +44,12 @@ export function SiteReport({ site, onBack }: { site: SavedSite; onBack: () => vo
   const parcelFeature = parcelBoundary ? { type: 'Feature' as const, properties: {}, geometry: parcelBoundary } : undefined
   const triggeredGates = analysis.hardGates.filter((gate) => gate.triggered)
   const hasParcelFacts = Boolean(site.parcel?.facts)
-  const suppliedNumber = hasParcelFacts ? '04' : '03'
-  const checklistNumber = hasParcelFacts ? '05' : '04'
-  const researchNumber = hasParcelFacts ? '06' : '05'
+  const hasJurisdiction = Boolean(site.jurisdiction)
+  const sectionNumber = (value: number) => String(value).padStart(2, '0')
+  const parcelNumber = sectionNumber(3 + (hasJurisdiction ? 1 : 0))
+  const suppliedNumber = sectionNumber(3 + (hasJurisdiction ? 1 : 0) + (hasParcelFacts ? 1 : 0))
+  const checklistNumber = sectionNumber(4 + (hasJurisdiction ? 1 : 0) + (hasParcelFacts ? 1 : 0))
+  const researchNumber = sectionNumber(5 + (hasJurisdiction ? 1 : 0) + (hasParcelFacts ? 1 : 0))
   return (
     <main className="report-page">
       <div className="report-toolbar no-print">
@@ -92,16 +97,22 @@ export function SiteReport({ site, onBack }: { site: SavedSite; onBack: () => vo
             <Finding title="Unknowns" icon={<CircleHelp />} items={analysis.unknowns} tone="unknown" />
           </div>
         </section>
+        {hasJurisdiction && (
+          <section className="report-section report-jurisdiction">
+            <div className="report-section-title"><span>03</span><div><h2>Local development profile</h2><p>Official Austin jurisdiction, zoning, overlay, future-land-use, and principal base-standard screen.</p></div></div>
+            <JurisdictionPanel profile={site.jurisdiction} intendedUse={inputs.intendedUse} proposedUse={inputs.proposedUse} showHeading={false} />
+          </section>
+        )}
         {hasParcelFacts && (
           <section className="report-section report-parcel-facts">
-            <div className="report-section-title"><span>03</span><div><h2>Official parcel facts</h2><p>Normalized public assessor and cadastral attributes saved with this screening.</p></div></div>
+            <div className="report-section-title"><span>{parcelNumber}</span><div><h2>Official parcel facts</h2><p>Normalized public assessor and cadastral attributes saved with this screening.</p></div></div>
             <ParcelFactsPanel facts={site.parcel?.facts} provenance={site.parcel?.provenance} showHeading={false} />
           </section>
         )}
         <section className="report-section report-site-facts">
           <div className="report-section-title"><span>{suppliedNumber}</span><div><h2>Site facts supplied</h2><p>These entries have not been independently verified.</p></div></div>
           <dl>
-            <div><dt>Acres</dt><dd>{inputs.acres || 'Unknown'}</dd></div><div><dt>Estimated price</dt><dd>{inputs.estimatedPrice ? `$${Number(inputs.estimatedPrice).toLocaleString()}` : 'Unknown'}</dd></div><div><dt>Intended use</dt><dd>{inputs.intendedUse.replace('-', ' ')}</dd></div><div><dt>Road frontage</dt><dd>{inputs.roadFrontage}</dd></div><div><dt>Utilities nearby</dt><dd>{inputs.utilitiesNearby}</dd></div><div><dt>Data confidence</dt><dd>{analysis.confidence}%</dd></div>
+            <div><dt>Acres</dt><dd>{inputs.acres || 'Unknown'}</dd></div><div><dt>Estimated price</dt><dd>{inputs.estimatedPrice ? `$${Number(inputs.estimatedPrice).toLocaleString()}` : 'Unknown'}</dd></div><div><dt>Intended use</dt><dd>{inputs.intendedUse.replace('-', ' ')}{inputs.proposedUse ? ` · ${getAustinProposedUseDefinition(inputs.proposedUse)?.label ?? inputs.proposedUse}` : ''}</dd></div><div><dt>Road frontage</dt><dd>{inputs.roadFrontage}</dd></div><div><dt>Utilities nearby</dt><dd>{inputs.utilitiesNearby}</dd></div><div><dt>Data confidence</dt><dd>{analysis.confidence}%</dd></div>
           </dl>
           <div className="report-notes"><div><strong>Zoning notes</strong><p>{inputs.zoningNotes || 'Zoning not verified.'}</p></div><div><strong>Personal notes</strong><p>{inputs.notes || 'No personal notes entered.'}</p></div></div>
         </section>

@@ -134,6 +134,7 @@ export interface SetbackOverlay {
     sideSetbackMeters: number        // side edge setback
     rearSetbackMeters: number        // rear edge setback (opposite the pin/road)
     intendedUse: string              // the intended use that drove the distances
+    standardsSource?: 'jurisdiction-code' | 'screening-default' // optional for legacy saved/test snapshots
     samplePoints: number
   }
   provenance: DataProvenance
@@ -238,6 +239,27 @@ const SETBACK_PROVENANCE: DataProvenance = {
   sourceUrl: '',
   vintage: 'Conservative US-default front/side/rear setback distances by intended use',
   coverageNote: 'Perimeter setback applied to the parcel boundary using conservative US-default front/side/rear distances by intended use. The front edge is identified as the boundary edge closest to the selected pin location (a proxy for the road-facing side). Front/side/rear distances: residential 25/10/25 ft, mixed-use 30/15/20 ft, commercial 50/20/30 ft, industrial 50/30/30 ft, other 25/10/25 ft. These are screening defaults, not jurisdiction-specific ordinances. Local zoning codes, plat notes, and HOA covenants may require different distances. Verify with the local planning department before design.',
+}
+
+export interface SetbackStandardsInput {
+  frontFeet: number
+  sideFeet: number
+  rearFeet: number
+  district: string
+  authority: string
+  sourceUrl: string
+  sourceSection: string
+  notes?: string[]
+}
+
+function setbackProvenance(standards?: SetbackStandardsInput): DataProvenance {
+  if (!standards) return SETBACK_PROVENANCE
+  return {
+    source: `${standards.authority} ${standards.district} base setbacks`,
+    sourceUrl: standards.sourceUrl,
+    vintage: standards.sourceSection,
+    coverageNote: `Principal base-district front/interior-side/rear setbacks (${standards.frontFeet}/${standards.sideFeet}/${standards.rearFeet} ft) are applied to the parcel screen. Front is approximated as the edge nearest the selected pin; corner-lot street-side yards are not classified automatically. Overlays, compatibility, plat notes, deed restrictions, utility/drainage easements, use-specific rules, and current code may be more restrictive.${standards.notes?.length ? ` ${standards.notes.join(' ')}` : ''}`,
+  }
 }
 
 // ─── Network helper ─────────────────────────────────────────────────────
@@ -1096,18 +1118,13 @@ async function fetchSpeciesOverlay(boundary: GeoBoundary, gridPoints: { lng: num
 
 // ─── Setback overlay (perimeter setback, intended-use-aware) ────────────
 //
-// Applies a uniform perimeter setback to the parcel boundary using
-// conservative US-default distances by intended use. For each of the 400
-// parcel grid points, computes the distance to the nearest boundary edge;
-// points within the setback distance are "setback-constrained" and subtracted
-// from net developable acreage.
-//
-// These are screening defaults, not jurisdiction-specific ordinances. Local
-// zoning codes, plat notes, and HOA covenants may require larger setbacks or
-// different front/side/rear distances. The provenance makes this explicit.
-// Front vs. side vs. rear distinction would require road-context analysis
-// (which edge faces the road) — not yet wired. The uniform distance is the
-// max of typical front/side/rear for the use, which is conservative.
+// Classifies parcel edges as front/side/rear relative to the selected pin and
+// applies distinct distances to the 400-point parcel grid. Recognized local
+// standards (currently Austin RR/SF-1/SF-2/SF-3) replace the generic defaults;
+// all other parcels retain conservative intended-use screening distances.
+// The pin-facing edge is only a road-frontage proxy, and corner street-side
+// yards, overlays, plats, easements, and deed restrictions still require
+// manual verification.
 
 const SETBACK_DISTANCES_METERS: Record<IntendedUse, { front: number; side: number; rear: number }> = {
   residential: { front: 7.6, side: 3.0, rear: 7.6 },   // 25/10/25 ft
@@ -1160,14 +1177,18 @@ export function computeSetbackOverlay(
   boundaryInput: NonNullable<ScreeningArea['boundary']>,
   intendedUse: IntendedUse,
   pin?: { lng: number; lat: number },
+  standards?: SetbackStandardsInput,
 ): SetbackOverlay {
+  const provenance = setbackProvenance(standards)
   try {
     const boundary = narrowBoundary(boundaryInput)
     const { points: gridPoints } = gridSampleBoundary(boundary, 400)
     if (!gridPoints.length) {
-      return { available: false, provenance: SETBACK_PROVENANCE, error: 'No grid points inside the parcel boundary.' }
+      return { available: false, provenance, error: 'No grid points inside the parcel boundary.' }
     }
-    const dists = SETBACK_DISTANCES_METERS[intendedUse] ?? SETBACK_DISTANCES_METERS.other
+    const dists = standards
+      ? { front: standards.frontFeet * 0.3048, side: standards.sideFeet * 0.3048, rear: standards.rearFeet * 0.3048 }
+      : SETBACK_DISTANCES_METERS[intendedUse] ?? SETBACK_DISTANCES_METERS.other
 
     // If no pin location is provided, fall back to the uniform (max) setback.
     if (!pin) {
@@ -1186,16 +1207,17 @@ export function computeSetbackOverlay(
           sideSetbackMeters: dists.side,
           rearSetbackMeters: dists.rear,
           intendedUse,
+          standardsSource: standards ? 'jurisdiction-code' : 'screening-default',
           samplePoints: gridPoints.length,
         },
-        provenance: SETBACK_PROVENANCE,
+        provenance,
       }
     }
 
     // Compute the parcel centroid (average of the outer ring vertices).
     const outerRing = boundaryOuterRing(boundary)
     if (!outerRing || outerRing.length < 3) {
-      return { available: false, provenance: SETBACK_PROVENANCE, error: 'Parcel boundary has no outer ring.' }
+      return { available: false, provenance, error: 'Parcel boundary has no outer ring.' }
     }
     let centroidLng = 0, centroidLat = 0
     for (const v of outerRing) { centroidLng += v[0]; centroidLat += v[1] }
@@ -1250,14 +1272,28 @@ export function computeSetbackOverlay(
         sideSetbackMeters: dists.side,
         rearSetbackMeters: dists.rear,
         intendedUse,
+        standardsSource: standards ? 'jurisdiction-code' : 'screening-default',
         samplePoints: gridPoints.length,
       },
-      provenance: SETBACK_PROVENANCE,
+      provenance,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    return { available: false, provenance: SETBACK_PROVENANCE, error: message }
+    return { available: false, provenance, error: message }
   }
+}
+
+export function recomputeSetbackAndNetDevelopable(
+  data: ParcelOverlayData,
+  boundaryInput: NonNullable<ScreeningArea['boundary']>,
+  intendedUse: IntendedUse,
+  pin?: { lng: number; lat: number },
+  standards?: SetbackStandardsInput,
+): ParcelOverlayData {
+  const boundary = narrowBoundary(boundaryInput)
+  const setback = computeSetbackOverlay(boundaryInput, intendedUse, pin, standards)
+  const updated = { ...data, setback, fetchedAt: new Date().toISOString() }
+  return { ...updated, netDevelopable: computeNetDevelopable(boundary, updated) }
 }
 
 // ─── Net developable acreage ────────────────────────────────────────────

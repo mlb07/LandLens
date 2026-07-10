@@ -323,4 +323,23 @@ describe('computeSetbackOverlay', () => {
     expect(industrial.value!.setbackDistanceMeters).toBeGreaterThan(residential.value!.setbackDistanceMeters)
     expect(industrial.value!.setbackFraction).toBeGreaterThanOrEqual(residential.value!.setbackFraction)
   })
+
+  it('replaces generic distances with jurisdiction base standards and provenance', () => {
+    const result = computeSetbackOverlay(boundary, 'residential', { lng: -97.744, lat: 30.269 }, {
+      frontFeet: 25,
+      sideFeet: 5,
+      rearFeet: 10,
+      district: 'SF-3',
+      authority: 'City of Austin',
+      sourceUrl: 'https://example.test/code',
+      sourceSection: 'Austin LDC §25-2-492',
+    })
+    expect(result.available).toBe(true)
+    expect(result.value!.standardsSource).toBe('jurisdiction-code')
+    expect(result.value!.frontSetbackMeters).toBeCloseTo(7.62, 2)
+    expect(result.value!.sideSetbackMeters).toBeCloseTo(1.524, 3)
+    expect(result.value!.rearSetbackMeters).toBeCloseTo(3.048, 3)
+    expect(result.provenance.source).toContain('SF-3')
+    expect(result.provenance.vintage).toBe('Austin LDC §25-2-492')
+  })
 })

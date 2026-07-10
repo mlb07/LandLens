@@ -56,7 +56,7 @@ describe('storage', () => {
       id: 'test-1',
       stateCode: 'TX',
       coordinates: { lat: 30, lng: -97 },
-      inputs: { name: 'Test', acres: '10', location: 'TX', estimatedPrice: '', intendedUse: 'residential', roadFrontage: 'yes', utilitiesNearby: 'yes', zoningNotes: 'by-right', notes: '' },
+      inputs: { name: 'Test', acres: '10', location: 'TX', estimatedPrice: '', intendedUse: 'residential', proposedUse: 'single_family', roadFrontage: 'yes', utilitiesNearby: 'yes', zoningNotes: 'by-right', notes: '' },
       analysis: {
         finalScore: 90, rawScore: 90, scoredWeight: 100, verdict: 'Strong', verdictTone: 'strong',
         confidence: 80, confidenceLabel: 'High', confidencePenalty: 0, regionalHazardModifier: 0,
@@ -66,6 +66,12 @@ describe('storage', () => {
       },
       screeningArea: { kind: 'point' },
       parcel: { id: 'P-100', acres: 10, acreageKind: 'assessor', facts: { marketValue: 500_000, zoning: 'C2', yearBuilt: 2001 }, provenance: { source: 'County assessor', sourceUrl: 'https://example.gov' } },
+      jurisdiction: {
+        profileId: 'austin-travis-v1', authorityName: 'City of Austin', jurisdictionLabel: 'FULL PURPOSE', jurisdictionType: 'Austin full-purpose jurisdiction', jurisdictionCode: 'FULL',
+        zoningCode: 'SF-3-NP', baseDistrict: 'SF-3', standardsApply: true, overlays: [], futureLandUse: 'Single Family',
+        useCompatibility: { residential: 'likely-compatible', commercial: 'conditional-review', 'mixed-use': 'conditional-review', industrial: 'likely-incompatible', other: 'unresolved' },
+        reviewFlags: [], verifiedAt: '2026-07-10T00:00:00Z',
+      },
       createdAt: '2026-06-24T00:00:00Z',
       updatedAt: '2026-06-24T00:00:00Z',
     }
@@ -74,6 +80,8 @@ describe('storage', () => {
     expect(loaded).toHaveLength(1)
     expect(loaded[0].id).toBe('test-1')
     expect(loaded[0].parcel?.facts).toEqual({ marketValue: 500_000, zoning: 'C2', yearBuilt: 2001 })
+    expect(loaded[0].jurisdiction?.futureLandUse).toBe('Single Family')
+    expect(loaded[0].inputs.proposedUse).toBe('single_family')
   })
 
   it('migrates legacy v1 sites to the new 13-category shape', () => {

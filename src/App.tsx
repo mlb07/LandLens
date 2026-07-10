@@ -7,13 +7,14 @@ import { SiteForm } from './components/SiteForm'
 const SiteReport = lazy(() => import('./components/SiteReport').then(m => ({ default: m.SiteReport })))
 import { fetchOfficialSiteData, type OfficialSiteData } from './data/officialDataProvider'
 import { fetchParcelAt, formatParcelAcres } from './data/parcelProvider'
-import { fetchParcelOverlays, computeSetbackOverlay, type ParcelOverlayData } from './data/parcelOverlayProvider'
+import { fetchParcelOverlays, recomputeSetbackAndNetDevelopable, type ParcelOverlayData, type SetbackStandardsInput } from './data/parcelOverlayProvider'
 import { fetchRegionalHazards, type RegionalHazardData } from './data/regionalHazardProvider'
 import { registerDefaultLocalAdapters } from './data/localAdapters'
+import { AUSTIN_STANDARDS_SOURCE_URL } from './data/austinJurisdiction'
 import { getStateDefinition, stateDefinitions } from './data/states'
 import { analyzeSite } from './lib/scoring'
 import { loadSites, saveSites } from './lib/storage'
-import { EMPTY_SITE_INPUTS, type Coordinates, type ParcelSelection, type ParcelSnapshot, type SavedSite, type SiteAnalysis, type SiteInputs } from './types/site'
+import { EMPTY_SITE_INPUTS, type Coordinates, type JurisdictionProfile, type ParcelSelection, type ParcelSnapshot, type SavedSite, type SiteAnalysis, type SiteInputs } from './types/site'
 import './App.css'
 
 type View = 'explorer' | 'saved' | 'report'
@@ -39,6 +40,21 @@ function restoreParcel(site: SavedSite): ParcelSelection | undefined {
     id: site.parcel.id, acres: site.parcel.acres, acreageKind: site.parcel.acreageKind,
     facts: site.parcel.facts, provenance: site.parcel.provenance,
     boundary: site.screeningArea?.kind === 'parcel' ? site.screeningArea.boundary : undefined,
+  }
+}
+
+function jurisdictionSetbackStandards(profile?: JurisdictionProfile): SetbackStandardsInput | undefined {
+  const standards = profile?.standards
+  if (!profile?.standardsApply || !standards?.frontSetbackFeet || !standards.interiorSideSetbackFeet || !standards.rearSetbackFeet) return undefined
+  return {
+    frontFeet: standards.frontSetbackFeet,
+    sideFeet: standards.interiorSideSetbackFeet,
+    rearFeet: standards.rearSetbackFeet,
+    district: standards.district,
+    authority: profile.authorityName,
+    sourceUrl: AUSTIN_STANDARDS_SOURCE_URL,
+    sourceSection: standards.sourceSection,
+    notes: standards.notes,
   }
 }
 
@@ -182,17 +198,24 @@ function App() {
     }
   }, [coordinates, parcelBoundary, activeStateCode])
 
-  // Recompute the setback overlay when intended use changes (pure geometry, no network).
-  // The setback distance depends on inputs.intendedUse; all other overlays are
-  // network-fetched and stay cached when only the intended use changes.
+  const jurisdictionProfile = officialData?.zoning?.value?.profile
+
+  // Recompute setbacks and net developable acreage when the intended use or
+  // local zoning profile changes. Recognized Austin base districts replace
+  // generic defaults only inside the City's mapped regulatory jurisdiction.
   useEffect(() => {
     if (!parcelBoundary || !overlaysRef.current) return
-    const setback = computeSetbackOverlay(parcelBoundary, inputs.intendedUse, coordinates)
-    const updated = { ...overlaysRef.current, setback }
+    const updated = recomputeSetbackAndNetDevelopable(
+      overlaysRef.current,
+      parcelBoundary,
+      inputs.intendedUse,
+      coordinates,
+      jurisdictionSetbackStandards(jurisdictionProfile),
+    )
     overlaysRef.current = updated
     setOverlays(updated)
     setAnalysis(analyzeSite(coordinates, inputsRef.current, officialDataRef.current, true, updated, hazardsRef.current, parcelRef.current))
-  }, [inputs.intendedUse, parcelBoundary, coordinates])
+  }, [inputs.intendedUse, parcelBoundary, coordinates, jurisdictionProfile])
 
   // Fetch regional hazards (sea-level rise, wildfire, radon) alongside official data.
   useEffect(() => {
@@ -310,11 +333,12 @@ function App() {
       : existingSite?.screeningArea ?? { kind: 'point' as const }
     const now = new Date().toISOString()
     const parcelSnapshot = snapshotParcel(parcel) ?? existingSite?.parcel
+    const jurisdiction = jurisdictionProfile ?? existingSite?.jurisdiction
     if (currentId) {
-      const next = sites.map((site) => site.id === currentId ? { ...site, stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, parcel: parcelSnapshot, updatedAt: now } : site)
+      const next = sites.map((site) => site.id === currentId ? { ...site, stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, parcel: parcelSnapshot, jurisdiction, updatedAt: now } : site)
       persistSites(next)
     } else {
-      const saved: SavedSite = { id: crypto.randomUUID(), stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, parcel: parcelSnapshot, createdAt: now, updatedAt: now }
+      const saved: SavedSite = { id: crypto.randomUUID(), stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, parcel: parcelSnapshot, jurisdiction, createdAt: now, updatedAt: now }
       persistSites([saved, ...sites])
       setCurrentId(saved.id)
     }
@@ -367,6 +391,7 @@ function App() {
         ? { kind: 'parcel', provider: parcel.provenance?.source, boundary: parcel.boundary }
         : existingSite?.screeningArea ?? { kind: 'point' },
       parcel: parcelSnapshot,
+      jurisdiction: jurisdictionProfile ?? existingSite?.jurisdiction,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     }
     showReport(site, 'explorer')
@@ -408,7 +433,7 @@ function App() {
             <button className={panelTab === 'details' ? 'active' : ''} onClick={() => setPanelTab('details')}><span>2</span> Site inputs</button>
           </div>
           <div className="panel-scroll" ref={panelScrollRef} tabIndex={0} aria-label={panelTab === 'details' ? 'Site inputs' : 'Site analysis'}>
-            {panelTab === 'details' ? <SiteForm inputs={inputs} parcel={parcel} onChange={updateInputs} onAnalyze={runAnalysis} dirty={dirty} /> : <ScorePanel analysis={analysis} dirty={dirty} loading={analysisLoading} pendingSources={sourcesPending} fetchedAt={officialData?.fetchedAt} parcelOverlaysLoading={overlaysLoading} hazards={hazards} />}
+            {panelTab === 'details' ? <SiteForm inputs={inputs} parcel={parcel} jurisdiction={jurisdictionProfile} onChange={updateInputs} onAnalyze={runAnalysis} dirty={dirty} /> : <ScorePanel analysis={analysis} dirty={dirty} loading={analysisLoading} pendingSources={sourcesPending} fetchedAt={officialData?.fetchedAt} parcelOverlaysLoading={overlaysLoading} hazards={hazards} />}
           </div>
           <div className="panel-actions">
             <button className="secondary-button" onClick={reportCurrent}><FileText size={17} /> Report</button>

@@ -1,7 +1,8 @@
-import type { Coordinates, DataProvenance } from '../types/site'
+import type { Coordinates, DataProvenance, JurisdictionOverlay, JurisdictionProfile } from '../types/site'
 import type { OfficialObservation } from './officialDataProvider'
 import type { EasementsOverlayInput } from './parcelOverlayProvider'
 import { externalRequest } from './externalRequest'
+import { AUSTIN_FLUM_SOURCE_URL, AUSTIN_JURISDICTION_SOURCE_URL, AUSTIN_OVERLAY_SOURCE_URL, buildAustinJurisdictionProfile } from './austinJurisdiction'
 
 // ─── Local jurisdiction adapter framework ───────────────────────────────
 //
@@ -45,6 +46,7 @@ export interface ZoningData {
   zoningCode: string
   baseDistrict: string
   jurisdiction: string
+  profile?: JurisdictionProfile
 }
 
 export interface UtilityCapacityData {
@@ -418,10 +420,10 @@ const TX_COUNTY_EASEMENT_SPECS: TexasCountyEasementSpec[] = [
 const AUSTIN_BOUNDS = { south: 30.08, west: -98.02, north: 30.52, east: -97.53 }
 
 const AUSTIN_ZONING_PROVENANCE: DataProvenance = {
-  source: 'City of Austin zoning atlas',
+  source: 'City of Austin zoning, jurisdiction, overlay, and future-land-use profile',
   sourceUrl: 'https://maps.austintexas.gov/arcgis/rest/services/Shared/Zoning_1/MapServer/0',
   vintage: 'Live City of Austin GIS service',
-  coverageNote: 'Official zoning-district lookup for the City of Austin and surrounding mapped area. The district alone does not establish a by-right use: overlays, conditional uses, compatibility, site-plan review, and adopted code control. Confirm with Austin Planning.',
+  coverageNote: 'Official point lookup from the Austin zoning atlas, jurisdiction boundary, selected zoning overlays, and neighborhood-plan future land use. Numeric standards are principal base-district values only and are applied only in full- or limited-purpose jurisdiction. The result is not an official zoning verification; exact use, overlays, compatibility, site-plan review, plats, and current adopted code control.',
 }
 
 const AUSTIN_ELECTRIC_PROVENANCE: DataProvenance = {
@@ -445,6 +447,7 @@ async function queryAustinLayer(
     const params = new URLSearchParams({
       f: 'json', geometry: `${coordinates.lng},${coordinates.lat}`, geometryType: 'esriGeometryPoint',
       inSR: '4326', spatialRel: 'esriSpatialRelIntersects', outFields, returnGeometry: 'false',
+      returnDomainNames: 'true',
     })
     const response = await externalRequest(`${layerUrl}/query?${params}`, { signal: controller.signal })
     if (!response.ok) throw new Error(`Austin GIS service returned ${response.status}`)
@@ -457,14 +460,98 @@ async function queryAustinLayer(
   }
 }
 
+const AUSTIN_HIGH_IMPACT_OVERLAY_LAYER_IDS = [0, 2, 3, 4, 11, 14, 16, 17, 18, 19, 21, 22, 26, 28, 29, 31, 33]
+
+function overlayDetail(attributes: Record<string, string | number | null>): string | undefined {
+  const preferredKeys = [
+    'ZONING_OVERLAY_SUB_NAME', 'ZONING_OVERLAY_NAME', 'SUBDISTRICT', 'SUBDISTRICT_NAME',
+    'SETBACK_TYPE', 'SETBACK_COMMENTS', 'NAME', 'LABEL',
+  ]
+  for (const key of preferredKeys) {
+    const value = attributes[key]
+    if (value !== null && value !== undefined && String(value).trim()) return String(value).trim()
+  }
+  return Object.entries(attributes)
+    .find(([key, value]) => !/objectid|shape|globalid/i.test(key) && value !== null && String(value).trim())?.[1]
+    ?.toString()
+}
+
+async function queryAustinOverlays(coordinates: Coordinates, signal?: AbortSignal): Promise<JurisdictionOverlay[]> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 12_000)
+  const abort = () => controller.abort()
+  signal?.addEventListener('abort', abort, { once: true })
+  try {
+    const delta = 0.002
+    const params = new URLSearchParams({
+      f: 'json',
+      geometry: `${coordinates.lng},${coordinates.lat}`,
+      geometryType: 'esriGeometryPoint',
+      sr: '4326',
+      tolerance: '1',
+      mapExtent: `${coordinates.lng - delta},${coordinates.lat - delta},${coordinates.lng + delta},${coordinates.lat + delta}`,
+      imageDisplay: '800,600,96',
+      returnGeometry: 'false',
+      returnFieldName: 'true',
+      layers: `all:${AUSTIN_HIGH_IMPACT_OVERLAY_LAYER_IDS.join(',')}`,
+    })
+    const response = await externalRequest(`${AUSTIN_OVERLAY_SOURCE_URL}/identify?${params}`, { signal: controller.signal })
+    if (!response.ok) throw new Error(`Austin overlay service returned ${response.status}`)
+    const data = await response.json() as {
+      results?: Array<{ layerId: number; layerName: string; attributes?: Record<string, string | number | null> }>
+      error?: { message?: string }
+    }
+    if (data.error) throw new Error(data.error.message || 'Austin overlay identify failed')
+    const seen = new Set<string>()
+    return (data.results ?? []).flatMap((result) => {
+      const detail = overlayDetail(result.attributes ?? {})
+      const key = `${result.layerId}:${detail ?? ''}`
+      if (seen.has(key)) return []
+      seen.add(key)
+      return [{ name: result.layerName, detail, layerId: result.layerId }]
+    })
+  } finally {
+    window.clearTimeout(timeout)
+    signal?.removeEventListener('abort', abort)
+  }
+}
+
+function firstAttribute(attributes: Record<string, string | number | null> | undefined, keys: string[]): string | undefined {
+  if (!attributes) return undefined
+  for (const key of keys) {
+    const match = Object.entries(attributes).find(([candidate]) => candidate.toUpperCase() === key)
+    if (match?.[1] !== null && match?.[1] !== undefined && String(match[1]).trim()) return String(match[1]).trim()
+  }
+  return undefined
+}
+
 function makeAustinZoningAdapter(): LocalAdapter {
   return {
     id: 'austin-tx-zoning-atlas', category: 'zoningAtlas', jurisdiction: 'City of Austin, TX', stateCode: 'TX', bounds: AUSTIN_BOUNDS,
     async query(coordinates, signal) {
       try {
-        const attributes = (await queryAustinLayer('https://maps.austintexas.gov/arcgis/rest/services/Shared/Zoning_1/MapServer/0', 'ZONING_ZTYPE,ZONING_BASE', coordinates, signal))[0]
+        const [zoningResult, jurisdictionResult, overlayResult, flumResult] = await Promise.allSettled([
+          queryAustinLayer('https://maps.austintexas.gov/arcgis/rest/services/Shared/Zoning_1/MapServer/0', 'ZONING_ZTYPE,ZONING_BASE', coordinates, signal),
+          queryAustinLayer(AUSTIN_JURISDICTION_SOURCE_URL, 'CITY_NAME,JURISDICTION_LABEL,JURISDICTION_TYPE,JURISDICTION_TYPE_SPECIFICS', coordinates, signal),
+          queryAustinOverlays(coordinates, signal),
+          queryAustinLayer(AUSTIN_FLUM_SOURCE_URL, '*', coordinates, signal),
+        ])
+        const attributes = zoningResult.status === 'fulfilled' ? zoningResult.value[0] : undefined
         if (!attributes) return { available: false, provenance: AUSTIN_ZONING_PROVENANCE, error: 'No Austin zoning district was returned at this point.' }
-        return { available: true, value: { zoningCode: String(attributes.ZONING_ZTYPE || ''), baseDistrict: String(attributes.ZONING_BASE || ''), jurisdiction: 'City of Austin, TX' } satisfies ZoningData, provenance: AUSTIN_ZONING_PROVENANCE }
+        const jurisdictionAttributes = jurisdictionResult.status === 'fulfilled' ? jurisdictionResult.value[0] : undefined
+        const flumAttributes = flumResult.status === 'fulfilled' ? flumResult.value[0] : undefined
+        const zoningCode = String(attributes.ZONING_ZTYPE || '')
+        const mappedBaseDistrict = String(attributes.ZONING_BASE || zoningCode)
+        const profile = buildAustinJurisdictionProfile({
+          zoningCode,
+          baseDistrict: mappedBaseDistrict,
+          cityName: firstAttribute(jurisdictionAttributes, ['CITY_NAME']),
+          jurisdictionCode: firstAttribute(jurisdictionAttributes, ['JURISDICTION_TYPE']),
+          jurisdictionLabel: firstAttribute(jurisdictionAttributes, ['JURISDICTION_LABEL', 'JURISDICTION_TYPE_SPECIFICS']),
+          overlays: overlayResult.status === 'fulfilled' ? overlayResult.value : [],
+          futureLandUse: firstAttribute(flumAttributes, ['FUTURE_LAND_USE', 'FUTURE LAND USE', 'FLUM']),
+        })
+        return { available: true, value: { zoningCode, baseDistrict: profile.baseDistrict, jurisdiction: profile.jurisdictionLabel, profile } satisfies ZoningData, provenance: AUSTIN_ZONING_PROVENANCE }
       } catch (error) {
         return { available: false, provenance: AUSTIN_ZONING_PROVENANCE, error: error instanceof Error ? error.message : String(error) }
       }

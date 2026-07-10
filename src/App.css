@@ -98,6 +98,48 @@
 .report-parcel-facts .parcel-facts-card { margin-bottom: 0; padding: 0; border: 0; background: transparent; }
 .report-parcel-facts .parcel-facts-group dl { grid-template-columns: repeat(3, 1fr); }
 .report-parcel-facts .parcel-facts-group dl > div { padding: 9px 10px; }
+.jurisdiction-card { margin: 0 0 19px; padding: 13px; border: 1px solid #d7e2dc; border-radius: 10px; background: linear-gradient(145deg, #fbfdfb, #f4f8f5); }
+.jurisdiction-heading { margin-bottom: 12px; }
+.jurisdiction-heading > div { display: flex; align-items: center; gap: 6px; color: var(--green); }
+.jurisdiction-heading span { font-size: 10px; font-weight: 800; }
+.jurisdiction-heading em { margin-left: auto; padding: 2px 5px; border-radius: 4px; background: var(--green-pale); font-size: 7px; font-style: normal; font-weight: 800; text-transform: uppercase; }
+.jurisdiction-heading p { margin: 5px 0 0; color: #75827b; font-size: 8px; line-height: 1.45; }
+.jurisdiction-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin: 0; overflow: hidden; border: 1px solid #e0e7e2; border-radius: 7px; background: #e0e7e2; }
+.jurisdiction-summary > div { min-width: 0; padding: 8px 9px; background: #fff; }
+.jurisdiction-card dt { color: #829087; font-size: 7px; text-transform: uppercase; letter-spacing: .35px; }
+.jurisdiction-card dd { margin: 3px 0 0; color: #34433b; font-size: 9px; line-height: 1.35; overflow-wrap: anywhere; }
+.jurisdiction-summary .use-status.likely-compatible dd { color: #237449; font-weight: 800; }
+.jurisdiction-summary .use-status.conditional-review dd, .jurisdiction-summary .use-status.unresolved dd { color: #9b6417; font-weight: 800; }
+.jurisdiction-summary .use-status.likely-incompatible dd { color: #b2452a; font-weight: 800; }
+.jurisdiction-summary .exact-use-status.permitted dd { color: #237449; font-weight: 800; }
+.jurisdiction-summary .exact-use-status.conditional dd, .jurisdiction-summary .exact-use-status.special-review dd, .jurisdiction-summary .exact-use-status.unresolved dd { color: #9b6417; font-weight: 800; }
+.jurisdiction-summary .exact-use-status.prohibited dd { color: #b2452a; font-weight: 800; }
+.jurisdiction-use-assessment { margin-top: 10px; padding: 9px; border: 1px solid #dfe6e1; border-left: 3px solid #6b8f7a; border-radius: 6px; background: #fff; }
+.jurisdiction-use-assessment.conditional, .jurisdiction-use-assessment.special-review, .jurisdiction-use-assessment.unresolved { border-left-color: #d6a04c; background: #fffaf1; }
+.jurisdiction-use-assessment.prohibited { border-left-color: #c15c43; background: #fff5f2; }
+.jurisdiction-use-assessment > strong { color: #526158; font-size: 7px; text-transform: uppercase; letter-spacing: .45px; }
+.jurisdiction-use-assessment p { margin: 4px 0 0; color: #5f6e66; font-size: 7.5px; line-height: 1.45; }
+.jurisdiction-use-assessment span { display: block; margin-top: 5px; color: #87928c; font-size: 7px; }
+.jurisdiction-overlays, .jurisdiction-standards, .jurisdiction-flags { margin-top: 11px; }
+.jurisdiction-overlays h3, .jurisdiction-standards h3 { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; color: #66756d; font-size: 7px; text-transform: uppercase; letter-spacing: .55px; }
+.jurisdiction-overlays ul { display: flex; flex-wrap: wrap; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.jurisdiction-overlays li { padding: 5px 7px; border: 1px solid #dfe6e1; border-radius: 6px; background: white; color: #405047; font-size: 7.5px; }
+.jurisdiction-overlays li strong, .jurisdiction-overlays li span { display: block; }
+.jurisdiction-overlays li span { margin-top: 2px; color: #7d8a83; }
+.jurisdiction-standards > dl { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 9px; margin: 0; }
+.jurisdiction-standards > dl > div { padding-left: 7px; border-left: 2px solid #c9ded1; }
+.jurisdiction-standards > p { margin: 7px 0 0; color: #7b8881; font-size: 7px; line-height: 1.45; }
+.jurisdiction-flags { padding: 9px; border-left: 3px solid #d6a04c; border-radius: 5px; background: #fff8eb; color: #74572d; }
+.jurisdiction-flags > strong { display: block; font-size: 7px; text-transform: uppercase; letter-spacing: .4px; }
+.jurisdiction-flags ul { margin: 5px 0 0; padding-left: 14px; }
+.jurisdiction-flags li { margin-top: 3px; font-size: 7.5px; line-height: 1.4; }
+.jurisdiction-sources { display: flex; flex-wrap: wrap; gap: 6px 11px; margin-top: 10px; }
+.jurisdiction-sources a { display: flex; align-items: center; gap: 3px; color: var(--green); font-size: 7px; font-weight: 750; text-decoration: none; }
+.report-jurisdiction .jurisdiction-card { margin-bottom: 0; padding: 0; border: 0; background: transparent; }
+.report-jurisdiction .jurisdiction-summary, .report-jurisdiction .jurisdiction-standards > dl { grid-template-columns: repeat(3, 1fr); }
+.proposed-use-field > span { display: flex; align-items: center; gap: 6px; }
+.proposed-use-field > span em { padding: 2px 5px; border-radius: 4px; background: var(--green-pale); color: var(--green); font-size: 7px; font-style: normal; font-weight: 800; text-transform: uppercase; }
+.proposed-use-field > small { display: block; margin-top: 5px; color: #7c8981; font-size: 7.5px; line-height: 1.4; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px 12px; }
 .field { min-width: 0; display: block; margin: 0; padding: 0; border: 0; }
 .field-full { grid-column: 1 / -1; }

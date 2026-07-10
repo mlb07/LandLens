@@ -12,11 +12,11 @@ npm run dev
 Open the local URL printed by Vite. A production build can be generated with `npm run build`.
 
 ```bash
-npm run test       # run 104 unit/provider/component tests
+npm run test       # run 161 unit/provider/component tests
 npm run lint       # eslint
 npm run build      # tsc + vite build
 npm run test:e2e   # browser save → compare → report regression test
-npm run verify:providers # live national/local APIs plus 12 parcel-schema contracts
+npm run verify:providers # 19 live national/local and parcel-schema contracts
 ```
 
 ## Production data proxy
@@ -49,7 +49,10 @@ VITE_DATA_PROXY_URL=https://data.example.com/api/data npm run build
 - Honest unavailable categories when no official source is wired yet — never fabricated
 - No neutral “50” fallback: unknown categories are excluded and the app waits for at least 50% verified evidence before showing an overall score
 - Extensible parcel-provider registry with fast two-stage ArcGIS queries and honest gap/offline states
-- First local entitlement/utility adapters: City of Austin zoning atlas and Austin Energy service-area screening, with explicit legal/capacity caveats
+- Local entitlement/utility adapters: City of Austin planning profile and Austin Energy service-area screening, with explicit legal/capacity caveats
+- Austin/Travis jurisdiction pack: full-purpose/limited-purpose/ETJ classification, high-impact zoning overlays, neighborhood-plan future land use, conservative intended-use compatibility, and codified RR/SF-1/SF-2/SF-3 principal standards
+- Jurisdiction-aware setbacks: recognized Austin base-district front/interior-side/rear values replace generic distances and immediately recompute net developable acreage; special districts and superseding controls stay flagged for manual review
+- Austin exact-use screen: an optional concrete-use selector checks 30 high-value residential, commercial, industrial, agricultural, and civic uses across all 38 §25-2-491 base-district columns, preserving permitted, conditional, prohibited, and footnoted/special-review outcomes
 
 Search and map tiles use public OpenStreetMap-based services. State boundaries are derived from U.S. Census Bureau cartographic data distributed by `us-atlas`. The analysis reads FEMA NFHL, USGS 3DEP elevation, Census TIGERweb Transportation, and FWS National Wetlands Inventory services directly. Population trend uses 2019 and 2024 ACS 5-year tract estimates when `VITE_CENSUS_API_KEY` is configured; copy `.env.example` to `.env` and add a free Census API key.
 

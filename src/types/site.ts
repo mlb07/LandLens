@@ -1,5 +1,12 @@
 export type TriState = 'yes' | 'no' | 'unknown'
 export type IntendedUse = 'residential' | 'commercial' | 'mixed-use' | 'industrial' | 'other'
+export type AustinProposedUse =
+  | 'single_family' | 'duplex' | 'two_family' | 'multifamily' | 'townhouse' | 'condominium' | 'mobile_home' | 'bed_breakfast_group1'
+  | 'professional_office' | 'medical_office_small' | 'general_retail_convenience' | 'general_retail_general'
+  | 'restaurant_limited' | 'restaurant_general' | 'food_sales' | 'personal_services' | 'hotel_motel'
+  | 'indoor_entertainment' | 'automotive_repair' | 'convenience_storage'
+  | 'custom_manufacturing' | 'light_manufacturing' | 'limited_warehousing' | 'general_warehousing'
+  | 'community_garden' | 'urban_farm' | 'daycare_limited' | 'daycare_general' | 'daycare_commercial' | 'religious_assembly'
 export type DataStatus = 'official' | 'user' | 'unknown' | 'mock'
 export type VerdictTone = 'strong' | 'interesting' | 'research' | 'weak' | 'manual'
 
@@ -14,6 +21,7 @@ export interface SiteInputs {
   location: string
   estimatedPrice: string
   intendedUse: IntendedUse
+  proposedUse?: AustinProposedUse
   roadFrontage: TriState
   utilitiesNearby: TriState
   zoningNotes: string
@@ -96,8 +104,50 @@ export interface SavedSite {
   analysis: SiteAnalysis
   screeningArea?: ScreeningArea
   parcel?: ParcelSnapshot
+  jurisdiction?: JurisdictionProfile
   createdAt: string
   updatedAt: string
+}
+
+export type JurisdictionUseStatus = 'likely-compatible' | 'conditional-review' | 'likely-incompatible' | 'unresolved'
+
+export interface JurisdictionOverlay {
+  name: string
+  detail?: string
+  layerId: number
+}
+
+export interface DimensionalStandards {
+  district: string
+  minimumLotSquareFeet?: number
+  minimumLotWidthFeet?: number
+  maximumHeightFeet?: number
+  frontSetbackFeet?: number
+  streetSideSetbackFeet?: number
+  interiorSideSetbackFeet?: number
+  rearSetbackFeet?: number
+  maximumBuildingCoveragePercent?: number
+  maximumImperviousCoverPercent?: number
+  maximumFloorAreaRatio?: number
+  sourceSection: string
+  notes: string[]
+}
+
+export interface JurisdictionProfile {
+  profileId: string
+  authorityName: string
+  jurisdictionLabel: string
+  jurisdictionType: string
+  jurisdictionCode?: string
+  zoningCode: string
+  baseDistrict: string
+  standardsApply: boolean
+  standards?: DimensionalStandards
+  overlays: JurisdictionOverlay[]
+  futureLandUse?: string
+  useCompatibility: Record<IntendedUse, JurisdictionUseStatus>
+  reviewFlags: string[]
+  verifiedAt: string
 }
 
 export interface ParcelFacts {

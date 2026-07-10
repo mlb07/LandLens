@@ -2,6 +2,7 @@ import type { OfficialSiteData } from '../data/officialDataProvider'
 import type { ParcelOverlayData, SoilsOverlay, StormwaterOverlay, EasementsOverlay, ContaminationOverlay, SpeciesOverlay } from '../data/parcelOverlayProvider'
 import type { RegionalHazardData } from '../data/regionalHazardProvider'
 import type { Coordinates, HardGate, IntendedUse, MetricResult, ParcelSelection, ScoreCategory, SiteAnalysis, SiteInputs, VerdictTone } from '../types/site'
+import { assessAustinProposedUse } from '../data/austinPermittedUses'
 
 // Core weighted categories — weights sum to 100. See docs/PROJECT_RECORD.md.
 export const CATEGORY_WEIGHTS: Record<ScoreCategory, number> = {
@@ -90,12 +91,62 @@ function userMetric(category: ScoreCategory, score: number, displayValue: string
 function zoningMetric(inputs: SiteInputs, official?: OfficialSiteData['zoning'], parcel?: ParcelSelection): MetricResult {
   const notes = inputs.zoningNotes.trim()
   const mappedZoning = official?.available && official.value
-    ? { code: official.value.zoningCode || official.value.baseDistrict || 'Unlabeled district', base: official.value.baseDistrict || official.value.zoningCode || 'Unlabeled district', jurisdiction: official.value.jurisdiction, provenance: official.provenance }
+    ? { code: official.value.zoningCode || official.value.baseDistrict || 'Unlabeled district', base: official.value.baseDistrict || official.value.zoningCode || 'Unlabeled district', jurisdiction: official.value.jurisdiction, provenance: official.provenance, profile: official.value.profile }
     : parcel?.facts?.zoning
-      ? { code: parcel.facts.zoning, base: parcel.facts.zoning, jurisdiction: parcel.facts.municipality || parcel.facts.county || 'parcel jurisdiction', provenance: parcel.provenance }
+      ? { code: parcel.facts.zoning, base: parcel.facts.zoning, jurisdiction: parcel.facts.municipality || parcel.facts.county || 'parcel jurisdiction', provenance: parcel.provenance, profile: undefined }
       : undefined
   if (mappedZoning) {
-    const { code, base, jurisdiction, provenance } = mappedZoning
+    const { code, base, jurisdiction, provenance, profile } = mappedZoning
+    const userWarning = /\b(prohibit\w*|not allow\w*|not permit\w*)/i.test(notes)
+    if (profile) {
+      const proposedUse = assessAustinProposedUse(profile, inputs.proposedUse)
+      if (proposedUse) {
+        const score = proposedUse.status === 'permitted'
+          ? (proposedUse.requiresCombiningDistrictReview || proposedUse.requiresOverlayReview ? 74 : 86)
+          : proposedUse.status === 'conditional' ? 50
+            : proposedUse.status === 'prohibited' ? 12
+              : proposedUse.status === 'special-review' ? 44
+                : 48
+        const summary = proposedUse.status === 'permitted'
+          ? `${proposedUse.useLabel} is listed as permitted in the ${proposedUse.district} base-district table.`
+          : proposedUse.status === 'conditional'
+            ? `${proposedUse.useLabel} requires a conditional use permit in the ${proposedUse.district} base district.`
+            : proposedUse.status === 'prohibited'
+              ? `${proposedUse.useLabel} is not permitted by the ${proposedUse.district} base-district table.`
+              : proposedUse.status === 'special-review'
+                ? `${proposedUse.useLabel} is controlled by a combining-district, special-district, or footnoted rule.`
+                : `${proposedUse.useLabel} could not be resolved for this jurisdiction.`
+        return {
+          category: 'zoning', label: CATEGORY_LABELS.zoning, score: userWarning ? 15 : score, weight: CATEGORY_WEIGHTS.zoning,
+          status: 'official', provenance,
+          displayValue: `${code} · ${proposedUse.useLabel}`,
+          summary: userWarning ? 'Your zoning note says the proposed use is likely prohibited.' : summary,
+          detail: `${proposedUse.explanation} Source cell ${proposedUse.rawCell ?? 'unavailable'} in ${proposedUse.sourceSection}.${profile.overlays.length ? ` ${profile.overlays.length} mapped overlay${profile.overlays.length === 1 ? '' : 's'} still require review.` : ''}${profile.futureLandUse ? ` Future land use: ${profile.futureLandUse}.` : ''}${notes ? ' Your supplied zoning note is retained as additional context.' : ''}`,
+        }
+      }
+      const status = profile.useCompatibility[inputs.intendedUse]
+      const score = status === 'likely-compatible' ? (profile.overlays.length ? 70 : 78)
+        : status === 'conditional-review' ? 52
+          : status === 'likely-incompatible' ? 28
+            : 48
+      const statusSummary = status === 'likely-compatible'
+        ? `The ${base} district family is a preliminary match for ${inputs.intendedUse.replace('-', ' ')} use.`
+        : status === 'conditional-review'
+          ? `The exact ${inputs.intendedUse.replace('-', ' ')} use needs Austin's permitted-use chart and site-specific review.`
+          : status === 'likely-incompatible'
+            ? `The ${base} district family is a likely conflict for ${inputs.intendedUse.replace('-', ' ')} use.`
+            : 'Jurisdiction or special-district rules prevent an automated use screen.'
+      const standardsDetail = profile.standards
+        ? ` Principal ${base} dimensional standards are loaded from ${profile.standards.sourceSection}; more restrictive rules still control.`
+        : ' No numeric base-standard override is applied for this district.'
+      return {
+        category: 'zoning', label: CATEGORY_LABELS.zoning, score: userWarning ? 15 : score, weight: CATEGORY_WEIGHTS.zoning,
+        status: 'official', provenance,
+        displayValue: `${code} · ${profile.jurisdictionLabel}`,
+        summary: userWarning ? 'Your zoning note says the intended use is likely prohibited.' : statusSummary,
+        detail: `Official Austin profile: ${code} (base ${base}); ${profile.jurisdictionType}. ${profile.overlays.length ? `${profile.overlays.length} high-impact mapped overlay${profile.overlays.length === 1 ? '' : 's'} detected. ` : ''}${profile.futureLandUse ? `Future land use: ${profile.futureLandUse}. ` : ''}This is a district-family screen, not a §25-2-491 permitted-use determination.${standardsDetail}${notes ? ' Your supplied zoning note is retained as additional context.' : ''}`,
+      }
+    }
     const residential = /^(SF|MF|RM|MH|P)/i.test(base)
     const commercial = /^(CS|CH|GR|LR|GO|LO|NO|CR|CBD|DMU|MU)/i.test(base)
     const industrial = /^(LI|IP|MI)/i.test(base)
@@ -107,7 +158,6 @@ function zoningMetric(inputs: SiteInputs, official?: OfficialSiteData['zoning'],
           : inputs.intendedUse === 'industrial' ? industrial
             : true
     const score = !recognizedDistrictFamily ? 58 : likelyCompatible ? 72 : 32
-    const userWarning = /\b(prohibit\w*|not allow\w*|not permit\w*)/i.test(notes)
     return {
       category: 'zoning', label: CATEGORY_LABELS.zoning, score: userWarning ? 15 : score, weight: CATEGORY_WEIGHTS.zoning,
       status: 'official', provenance,
@@ -143,10 +193,12 @@ function netDevelopableMetric(inputs: SiteInputs, hasParcelBoundary: boolean, ov
     const subtractedSoils = nd.soilConstrainedAcres > 0
     const subtractedEasements = nd.easementAcres > 0
     const subtractedSetbacks = nd.setbackAcres > 0
-    const breakdown = `Gross ${nd.grossAcres} ac minus floodway ${nd.floodwayAcres} ac, wetlands ${nd.wetlandAcres} ac, steep slope (>20%) ${nd.steepSlopeAcres} ac${subtractedSoils ? `, hydric/severe soils ${nd.soilConstrainedAcres} ac` : ''}${subtractedEasements ? `, mapped easements/ROW ${nd.easementAcres} ac` : ''}${subtractedSetbacks ? `, perimeter setbacks ${nd.setbackAcres} ac` : ''} = constrained ${nd.constrainedAcres} ac. Net developable ${nd.netDevelopableAcres} ac. Based on ${nd.samplePoints} grid sample points. Setbacks use conservative US-default distances by intended use; verify with the local zoning ordinance.`
+    const localSetbacks = overlays?.setback.value?.standardsSource === 'jurisdiction-code'
+    const setbackStatement = localSetbacks ? 'Setbacks use the mapped jurisdiction base-district distances; verify all superseding controls.' : 'Setbacks use conservative US-default distances by intended use; verify with the local zoning ordinance.'
+    const breakdown = `Gross ${nd.grossAcres} ac minus floodway ${nd.floodwayAcres} ac, wetlands ${nd.wetlandAcres} ac, steep slope (>20%) ${nd.steepSlopeAcres} ac${subtractedSoils ? `, hydric/severe soils ${nd.soilConstrainedAcres} ac` : ''}${subtractedEasements ? `, mapped easements/ROW ${nd.easementAcres} ac` : ''}${subtractedSetbacks ? `, perimeter setbacks ${nd.setbackAcres} ac` : ''} = constrained ${nd.constrainedAcres} ac. Net developable ${nd.netDevelopableAcres} ac. Based on ${nd.samplePoints} grid sample points. ${setbackStatement}`
     return {
       category: 'netDevelopable', label: CATEGORY_LABELS.netDevelopable, score, weight: CATEGORY_WEIGHTS.netDevelopable,
-      status: 'official', provenance: { source: 'Parcel overlay calculation', sourceUrl: '#', vintage: 'Computed from FEMA, NWI, USGS, NRCS soils, local easements, and perimeter setback overlays', coverageNote: `Net developable is gross acres minus the union of floodway, wetlands, steep slope (>20%), hydric/severe soils${subtractedEasements ? ', recorded easements' : ''}, and perimeter setbacks. Setback distances are conservative US defaults by intended use; local zoning ordinances may differ.` },
+      status: 'official', provenance: { source: 'Parcel overlay calculation', sourceUrl: '#', vintage: 'Computed from FEMA, NWI, USGS, NRCS soils, local easements, and perimeter setback overlays', coverageNote: `Net developable is gross acres minus the union of floodway, wetlands, steep slope (>20%), hydric/severe soils${subtractedEasements ? ', recorded easements' : ''}, and perimeter setbacks. ${setbackStatement}` },
       displayValue: `${nd.netDevelopableAcres} net / ${nd.grossAcres} gross`,
       summary: ratio >= 0.70 ? `Net developable ratio is ${Math.round(ratio * 100)}% — strong.` : ratio >= 0.50 ? `Net developable ratio is ${Math.round(ratio * 100)}% — workable but constrained.` : `Net developable ratio is ${Math.round(ratio * 100)}% — heavily constrained.`,
       detail: breakdown,
@@ -784,6 +836,9 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
     species: speciesMetric(official?.species, overlays?.species),
     market: marketMetric(inputs, official?.demographics, official?.bps),
   }
+  const exactAustinUse = official?.zoning?.value?.profile
+    ? assessAustinProposedUse(official.zoning.value.profile, inputs.proposedUse)
+    : undefined
 
   const hardGates = evaluateHardGates(metrics, inputs, official, overlays)
   const triggeredGates = hardGates.filter((gate) => gate.triggered)
@@ -838,6 +893,8 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
   if (metrics.market.status === 'official' && metrics.market.score !== null && metrics.market.score >= 75) strengths.push('ACS tract population change is supportive.')
   if (metrics.utilities.status === 'user' && metrics.utilities.score !== null && metrics.utilities.score >= 70) strengths.push('You indicated utilities are nearby.')
   if (metrics.zoning.status === 'user' && metrics.zoning.score !== null && metrics.zoning.score >= 80) strengths.push('Your zoning notes indicate a by-right permitted use.')
+  if (!inputs.proposedUse && official?.zoning?.value?.profile?.useCompatibility[inputs.intendedUse] === 'likely-compatible') strengths.push(`The mapped ${official.zoning.value.profile.baseDistrict} district family is a preliminary match for the intended use.`)
+  if (exactAustinUse?.status === 'permitted') strengths.push(`${exactAustinUse.useLabel} is listed as permitted in the Austin ${exactAustinUse.district} base-use table.`)
   if (metrics.netDevelopable.status === 'official' && metrics.netDevelopable.score !== null && metrics.netDevelopable.score >= 75) strengths.push(`Net developable acreage is strong at ${overlays?.netDevelopable?.netDevelopableAcres} ac (${Math.round((overlays?.netDevelopable?.netToGrossRatio ?? 0) * 100)}% of gross).`)
   else if (metrics.netDevelopable.status === 'user' && metrics.netDevelopable.score !== null && metrics.netDevelopable.score >= 75) strengths.push('Reported gross acreage is ample for the intended use.')
   if (metrics.soils.status === 'official' && metrics.soils.score !== null && metrics.soils.score >= 75) strengths.push('NRCS soil ratings are favorable for building and septic.')
@@ -856,6 +913,11 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
   if (metrics.access.score !== null && metrics.access.score < 50) redFlags.push('Mapped-road proximity or stated frontage is weak.')
   if (metrics.utilities.status === 'user' && metrics.utilities.score !== null && metrics.utilities.score < 40) redFlags.push('You indicated utilities are not nearby.')
   if (metrics.zoning.status === 'user' && metrics.zoning.score !== null && metrics.zoning.score < 30) redFlags.push('Your zoning notes indicate the use may be prohibited or requires rezoning.')
+  if (!inputs.proposedUse && official?.zoning?.value?.profile?.useCompatibility[inputs.intendedUse] === 'likely-incompatible') redFlags.push(`The mapped ${official.zoning.value.profile.baseDistrict} district family is a likely conflict for the intended use; confirm the exact use and entitlement path.`)
+  if (exactAustinUse?.status === 'prohibited') redFlags.push(`${exactAustinUse.useLabel} is not permitted in the mapped ${exactAustinUse.district} base-district table.`)
+  if (exactAustinUse?.status === 'conditional') redFlags.push(`${exactAustinUse.useLabel} requires a conditional use permit in the mapped ${exactAustinUse.district} base district.`)
+  if (exactAustinUse?.status === 'special-review') redFlags.push(`${exactAustinUse.useLabel} requires Austin footnote, special-district, or combining-district review.`)
+  if (official?.zoning?.value?.profile?.overlays.length) redFlags.push(`${official.zoning.value.profile.overlays.length} Austin zoning overlay${official.zoning.value.profile.overlays.length === 1 ? '' : 's'} may supersede the base-district screen.`)
   if (Number(inputs.acres) > 0 && Number(inputs.acres) < 1 && inputs.intendedUse !== 'residential') redFlags.push('Reported acreage may be too small for the intended non-residential use.')
   if (metrics.market.status === 'official' && metrics.market.score !== null && metrics.market.score < 50) redFlags.push('ACS tract population change is weak.')
   if (metrics.soils.status === 'official' && metrics.soils.score !== null && metrics.soils.score < 40) redFlags.push('NRCS soils ratings are severe for septic/dwelling — geotechnical review and perc testing are critical.')
@@ -877,13 +939,14 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
     unknowns.push(`${metric.label} could not be verified from an official source.`)
   }
   if (inputs.utilitiesNearby === 'unknown') unknowns.push('Utility availability and capacity are unknown.')
-  if (!inputs.zoningNotes.trim()) unknowns.push('Zoning and future land use have not been verified.')
+  if (!official?.zoning?.available && !parcel?.facts?.zoning && !inputs.zoningNotes.trim()) unknowns.push('Zoning and future land use have not been verified.')
+  if (inputs.proposedUse && exactAustinUse?.status === 'unresolved') unknowns.push('The selected Austin proposed use could not be resolved for the mapped jurisdiction.')
   if (inputs.roadFrontage === 'unknown') unknowns.push('Legal road frontage has not been verified.')
   if (metrics.market.status === 'official' && inputs.intendedUse !== 'residential' && inputs.intendedUse !== 'mixed-use') {
     unknowns.push(`Census BPS permits are a residential-structure signal; for ${inputs.intendedUse} use, a market study of ${inputs.intendedUse === 'commercial' ? 'retail/commercial rents, vacancy, and household income' : inputs.intendedUse === 'industrial' ? 'industrial vacancy, lease rates, and employment' : 'intended-use demand and absorption'} is still needed.`)
   }
   unknowns.push(hasOverlays
-    ? 'Parcel-wide overlays are loaded for FEMA, NWI, slope, soils, stormwater, easements, EPA contamination, USFWS critical habitat, and perimeter setbacks. Net developable acreage subtracts the union of floodway, wetlands, steep slope, hydric/severe soils, mapped easements, and setbacks. Contamination and critical habitat are hard gates (not land-use takeouts) and are not subtracted from net developable acreage. Setback distances are conservative US defaults by intended use; verify with the local zoning ordinance.'
+    ? `Parcel-wide overlays are loaded for FEMA, NWI, slope, soils, stormwater, easements, EPA contamination, USFWS critical habitat, and perimeter setbacks. Net developable acreage subtracts the union of floodway, wetlands, steep slope, hydric/severe soils, mapped easements, and setbacks. Contamination and critical habitat are hard gates (not land-use takeouts) and are not subtracted from net developable acreage. ${overlays?.setback.value?.standardsSource === 'jurisdiction-code' ? 'Setbacks use mapped base-district values, but superseding local controls still require verification.' : 'Setback distances are conservative US defaults by intended use; verify with the local zoning ordinance.'}`
     : hasParcelBoundary
       ? 'A parcel boundary is loaded, but flood, wetland, slope, soils, and easement metrics still describe the selected point — not the entire parcel.'
       : 'This is a point screen; parcel boundaries, ownership, easements, and net buildable acreage are not loaded.')
@@ -918,7 +981,7 @@ function buildNextSteps(triggeredGates: HardGate[], hasParcelBoundary: boolean, 
         : 'Load or obtain the assessor parcel boundary, then rerun FEMA, NWI, slope, soils, stormwater, and easements as parcel-wide overlays.',
     )
   } else {
-    steps.push('Add parcel-wide contamination, species, and jurisdiction-specific setback overlays for a complete net-buildable-area calculation.')
+    steps.push('Validate parcel-wide contamination, species, easement, and setback results against local records and a survey before treating net acreage as design-ready.')
   }
   steps.push(
     'Confirm ownership, easements, legal access, and frontage from title and recorded plats (ALTA survey when required).',

@@ -24,6 +24,7 @@ export function ScorePanel({ analysis, dirty, loading, pendingSources = 0, fetch
   }
   const hasScore = analysis.finalScore !== null
   const hasParcelOverlays = analysis.metrics.floodplain.detail.includes('grid points') || analysis.metrics.netDevelopable.status === 'official'
+  const usesLocalSetbacks = analysis.metrics.netDevelopable.detail.includes('mapped jurisdiction base-district distances')
   return (
     <div className="score-panel">
       {pendingSources > 0 && <div className="analysis-updating"><LoaderCircle className="spin" size={14} /> Score ready · {pendingSources} {pendingSources === 1 ? 'source is' : 'sources are'} still updating</div>}
@@ -76,7 +77,7 @@ export function ScorePanel({ analysis, dirty, loading, pendingSources = 0, fetch
         </section>
       )}
 
-      <div className="point-screen-note"><MapPinned size={16} /><div><strong>{hasParcelOverlays ? 'Parcel-wide overlays active' : 'Point screening'}</strong><span>{hasParcelOverlays ? 'FEMA, NWI, slope, NRCS soils, USGS-3DEP stormwater drainage, local easements (where registered), EPA FRS contamination, USFWS critical habitat, and perimeter setbacks are computed across the full parcel boundary. Net developable acreage subtracts floodway, wetlands, steep slope, hydric/severe soils, mapped easements, and setbacks; contamination and critical habitat are hard gates (not land-use takeouts). Setback distances are conservative US defaults by intended use — verify with the local zoning ordinance.' : 'Results describe the selected point and nearby terrain — not the full parcel. Parcel-wide overlays are the next accuracy step.'}</span></div></div>
+      <div className="point-screen-note"><MapPinned size={16} /><div><strong>{hasParcelOverlays ? 'Parcel-wide overlays active' : 'Point screening'}</strong><span>{hasParcelOverlays ? `FEMA, NWI, slope, NRCS soils, USGS-3DEP stormwater drainage, local easements (where registered), EPA FRS contamination, USFWS critical habitat, and perimeter setbacks are computed across the full parcel boundary. Net developable acreage subtracts floodway, wetlands, steep slope, hydric/severe soils, mapped easements, and setbacks; contamination and critical habitat are hard gates (not land-use takeouts). ${usesLocalSetbacks ? 'Setbacks use mapped jurisdiction base-district values; verify superseding local controls.' : 'Setback distances are conservative US defaults by intended use — verify with the local zoning ordinance.'}` : 'Results describe the selected point and nearby terrain — not the full parcel. Parcel-wide overlays are the next accuracy step.'}</span></div></div>
 
       <div className="section-heading">
         <div><span className="eyebrow">Transparent scoring</span><h3>{hasScore ? `Why this site scored ${analysis.finalScore}` : 'Not enough verified evidence to score'}</h3></div>

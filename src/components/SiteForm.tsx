@@ -1,6 +1,8 @@
 import { BadgeCheck, Calculator, ChevronDown, Info, MapPinned } from 'lucide-react'
-import type { IntendedUse, ParcelSelection, SiteInputs, TriState } from '../types/site'
+import type { IntendedUse, JurisdictionProfile, ParcelSelection, SiteInputs, TriState } from '../types/site'
+import { JurisdictionPanel } from './JurisdictionPanel'
 import { ParcelFactsPanel } from './ParcelFactsPanel'
+import { AUSTIN_PROPOSED_USES, getAustinProposedUseDefinition } from '../data/austinPermittedUses'
 
 const intendedUses: Array<{ value: IntendedUse; label: string }> = [
   { value: 'residential', label: 'Residential' },
@@ -25,15 +27,29 @@ function TriStateField({ label, value, onChange }: { label: string; value: TriSt
   )
 }
 
-export function SiteForm({ inputs, parcel, onChange, onAnalyze, dirty }: {
+export function SiteForm({ inputs, parcel, jurisdiction, onChange, onAnalyze, dirty }: {
   inputs: SiteInputs
   parcel?: ParcelSelection
+  jurisdiction?: JurisdictionProfile
   onChange: (inputs: SiteInputs) => void
   onAnalyze: () => void
   dirty: boolean
 }) {
   function update<K extends keyof SiteInputs>(key: K, value: SiteInputs[K]) {
     onChange({ ...inputs, [key]: value })
+  }
+
+  function selectProposedUse(value: string) {
+    if (!value) {
+      onChange({ ...inputs, proposedUse: undefined })
+      return
+    }
+    const definition = getAustinProposedUseDefinition(value as NonNullable<SiteInputs['proposedUse']>)
+    onChange({ ...inputs, proposedUse: definition?.key, intendedUse: definition?.intendedUse ?? inputs.intendedUse })
+  }
+
+  function selectIntendedUse(value: IntendedUse) {
+    onChange({ ...inputs, intendedUse: value, proposedUse: undefined })
   }
 
   return (
@@ -47,6 +63,8 @@ export function SiteForm({ inputs, parcel, onChange, onAnalyze, dirty }: {
       {parcel?.status === 'found' && <div className="parcel-autofill-note"><BadgeCheck size={15} /><div><strong>Official parcel match</strong><span>{parcel.acreageKind === 'assessor' ? 'Name and acreage came from official parcel attributes.' : 'Name came from the parcel record when available; mapped acreage was calculated from the returned official boundary.'} Review before relying on them.</span></div></div>}
 
       {parcel?.status === 'found' && <ParcelFactsPanel facts={parcel.facts} provenance={parcel.provenance} />}
+
+      {jurisdiction && <JurisdictionPanel profile={jurisdiction} intendedUse={inputs.intendedUse} proposedUse={inputs.proposedUse} />}
 
       <div className="form-grid">
         <label className="field field-full">
@@ -68,12 +86,27 @@ export function SiteForm({ inputs, parcel, onChange, onAnalyze, dirty }: {
         <label className="field field-full">
           <span>Intended use</span>
           <div className="select-wrap">
-            <select value={inputs.intendedUse} onChange={(event) => update('intendedUse', event.target.value as IntendedUse)}>
+            <select value={inputs.intendedUse} onChange={(event) => selectIntendedUse(event.target.value as IntendedUse)}>
               {intendedUses.map((use) => <option key={use.value} value={use.value}>{use.label}</option>)}
             </select>
             <ChevronDown size={16} />
           </div>
         </label>
+        {jurisdiction?.profileId === 'austin-travis-v1' && <label className="field field-full proposed-use-field">
+          <span>Austin proposed-use detail <em>Optional</em></span>
+          <div className="select-wrap">
+            <select data-testid="austin-proposed-use" value={inputs.proposedUse ?? ''} onChange={(event) => selectProposedUse(event.target.value)}>
+              <option value="">Use broad intended-use screening</option>
+              {(['Residential', 'Commercial', 'Industrial', 'Agricultural & civic'] as const).map((group) => (
+                <optgroup label={group} key={group}>
+                  {AUSTIN_PROPOSED_USES.filter((use) => use.group === group).map((use) => <option key={use.key} value={use.key}>{use.label}</option>)}
+                </optgroup>
+              ))}
+            </select>
+            <ChevronDown size={16} />
+          </div>
+          <small>Checks the selected use against Austin LDC §25-2-491. Other code provisions and overlays can supersede the base table.</small>
+        </label>}
         <TriStateField label="Road frontage" value={inputs.roadFrontage} onChange={(value) => update('roadFrontage', value)} />
         <TriStateField label="Utilities nearby" value={inputs.utilitiesNearby} onChange={(value) => update('utilitiesNearby', value)} />
         <label className="field field-full">
