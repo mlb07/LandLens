@@ -20,7 +20,7 @@ const HAZARD_LABELS: Record<string, string> = {
 
 export function ScorePanel({ analysis, dirty, loading, pendingSources = 0, fetchedAt, parcelOverlaysLoading, hazards }: { analysis: SiteAnalysis; dirty: boolean; loading?: boolean; pendingSources?: number; fetchedAt?: string; parcelOverlaysLoading?: boolean; hazards?: RegionalHazardData | null }) {
   if (loading) {
-    return <div className="analysis-pending" role="status"><LoaderCircle className="spin" size={25} /><span className="eyebrow">Live source check</span><h2>Checking this location</h2><p>LandLens is querying 12 national and local sources: flood, elevation, roads, population, wetlands, soils, contamination, species, utilities, permits, stormwater drainage, and easements. No score will appear until enough verified evidence returns.</p></div>
+    return <div className="analysis-pending" role="status"><LoaderCircle className="spin" size={25} /><span className="eyebrow">Live source check</span><h2>Checking this location</h2><p>LandLens is querying 14 national and local sources: flood, elevation, roads, population, wetlands, soils, contamination, species, utilities, permits, stormwater, easements, zoning, and local utility service. No score will appear until enough verified evidence returns.</p></div>
   }
   const hasScore = analysis.finalScore !== null
   const hasParcelOverlays = analysis.metrics.floodplain.detail.includes('grid points') || analysis.metrics.netDevelopable.status === 'official'

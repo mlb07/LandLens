@@ -1,6 +1,7 @@
 import type { Coordinates, DataProvenance } from '../types/site'
 import type { OfficialObservation } from './officialDataProvider'
 import type { EasementsOverlayInput } from './parcelOverlayProvider'
+import { externalRequest } from './externalRequest'
 
 // ─── Local jurisdiction adapter framework ───────────────────────────────
 //
@@ -39,6 +40,22 @@ export interface EasementData {
 }
 
 export type EasementsObservation = OfficialObservation<EasementData>
+
+export interface ZoningData {
+  zoningCode: string
+  baseDistrict: string
+  jurisdiction: string
+}
+
+export interface UtilityCapacityData {
+  utilityName: string
+  utilityType: 'electric' | 'water' | 'sewer' | 'multiple'
+  inServiceArea: boolean
+  jurisdiction: string
+}
+
+export type ZoningObservation = OfficialObservation<ZoningData>
+export type UtilityCapacityObservation = OfficialObservation<UtilityCapacityData>
 
 // ─── Registry ───────────────────────────────────────────────────────────
 
@@ -112,6 +129,48 @@ export async function fetchEasements(coordinates: Coordinates, stateCode: string
     provenance: EASEMENTS_PROVENANCE,
     error: 'Local easement adapters were found but did not return usable data.',
   }
+}
+
+const ZONING_FALLBACK_PROVENANCE: DataProvenance = {
+  source: 'No local zoning atlas adapter',
+  sourceUrl: '',
+  vintage: 'N/A',
+  coverageNote: 'No official zoning-atlas adapter is registered for this jurisdiction. Confirm the zoning district, overlays, permitted use, development standards, and entitlement path with the local planning department.',
+}
+
+const UTILITY_FALLBACK_PROVENANCE: DataProvenance = {
+  source: 'No local utility-service adapter',
+  sourceUrl: '',
+  vintage: 'N/A',
+  coverageNote: 'No local utility-service adapter is registered for this jurisdiction. A utility service map does not prove capacity, allocation, extension cost, or a right to serve; obtain written will-serve/capacity letters.',
+}
+
+async function fetchLocalObservation<T>(
+  category: 'zoningAtlas' | 'utilityCapacity',
+  coordinates: Coordinates,
+  stateCode: string,
+  fallback: DataProvenance,
+  signal?: AbortSignal,
+): Promise<OfficialObservation<T>> {
+  const adapters = getLocalAdapters(category, coordinates, stateCode)
+  if (!adapters.length) return { available: false, provenance: fallback, error: `No local ${category === 'zoningAtlas' ? 'zoning-atlas' : 'utility-service'} adapter is registered for this jurisdiction.` }
+  for (const adapter of adapters) {
+    try {
+      const result = await adapter.query(coordinates, signal)
+      if (result.available && result.value) return { available: true, value: result.value as T, provenance: result.provenance }
+    } catch {
+      // Continue to another authoritative adapter covering the same point.
+    }
+  }
+  return { available: false, provenance: fallback, error: `Local ${category === 'zoningAtlas' ? 'zoning-atlas' : 'utility-service'} adapters did not return usable data.` }
+}
+
+export function fetchZoningAtlas(coordinates: Coordinates, stateCode: string, signal?: AbortSignal): Promise<ZoningObservation> {
+  return fetchLocalObservation<ZoningData>('zoningAtlas', coordinates, stateCode, ZONING_FALLBACK_PROVENANCE, signal)
+}
+
+export function fetchUtilityCapacity(coordinates: Coordinates, stateCode: string, signal?: AbortSignal): Promise<UtilityCapacityObservation> {
+  return fetchLocalObservation<UtilityCapacityData>('utilityCapacity', coordinates, stateCode, UTILITY_FALLBACK_PROVENANCE, signal)
 }
 
 // Resolve the parcel-wide easements overlay from the registered local
@@ -237,7 +296,7 @@ function makeTexasCountyEasementAdapter(spec: TexasCountyEasementSpec): LocalAda
         returnGeometry: 'false',
         outSR: '4326',
       })
-      const response = await fetch(
+      const response = await externalRequest(
         `${spec.serviceUrl}/query?${params}`,
         { signal: controller.signal },
       )
@@ -356,6 +415,77 @@ const TX_COUNTY_EASEMENT_SPECS: TexasCountyEasementSpec[] = [
   },
 ]
 
+const AUSTIN_BOUNDS = { south: 30.08, west: -98.02, north: 30.52, east: -97.53 }
+
+const AUSTIN_ZONING_PROVENANCE: DataProvenance = {
+  source: 'City of Austin zoning atlas',
+  sourceUrl: 'https://maps.austintexas.gov/arcgis/rest/services/Shared/Zoning_1/MapServer/0',
+  vintage: 'Live City of Austin GIS service',
+  coverageNote: 'Official zoning-district lookup for the City of Austin and surrounding mapped area. The district alone does not establish a by-right use: overlays, conditional uses, compatibility, site-plan review, and adopted code control. Confirm with Austin Planning.',
+}
+
+const AUSTIN_ELECTRIC_PROVENANCE: DataProvenance = {
+  source: 'Austin Energy utility service area',
+  sourceUrl: 'https://maps.austintexas.gov/arcgis/rest/services/Shared/BoundariesGrids_2/MapServer/1',
+  vintage: 'Live City of Austin GIS service',
+  coverageNote: 'Official electric service-boundary lookup only. It does not establish electrical capacity, distribution availability, extension cost, or a right to serve; obtain an Austin Energy service/capacity confirmation.',
+}
+
+async function queryAustinLayer(
+  layerUrl: string,
+  outFields: string,
+  coordinates: Coordinates,
+  signal?: AbortSignal,
+): Promise<Array<Record<string, string | number | null>>> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 12_000)
+  const abort = () => controller.abort()
+  signal?.addEventListener('abort', abort, { once: true })
+  try {
+    const params = new URLSearchParams({
+      f: 'json', geometry: `${coordinates.lng},${coordinates.lat}`, geometryType: 'esriGeometryPoint',
+      inSR: '4326', spatialRel: 'esriSpatialRelIntersects', outFields, returnGeometry: 'false',
+    })
+    const response = await externalRequest(`${layerUrl}/query?${params}`, { signal: controller.signal })
+    if (!response.ok) throw new Error(`Austin GIS service returned ${response.status}`)
+    const data = await response.json() as { features?: Array<{ attributes?: Record<string, string | number | null> }>; error?: { message?: string } }
+    if (data.error) throw new Error(data.error.message || 'Austin GIS query failed')
+    return data.features?.flatMap((feature) => feature.attributes ? [feature.attributes] : []) || []
+  } finally {
+    window.clearTimeout(timeout)
+    signal?.removeEventListener('abort', abort)
+  }
+}
+
+function makeAustinZoningAdapter(): LocalAdapter {
+  return {
+    id: 'austin-tx-zoning-atlas', category: 'zoningAtlas', jurisdiction: 'City of Austin, TX', stateCode: 'TX', bounds: AUSTIN_BOUNDS,
+    async query(coordinates, signal) {
+      try {
+        const attributes = (await queryAustinLayer('https://maps.austintexas.gov/arcgis/rest/services/Shared/Zoning_1/MapServer/0', 'ZONING_ZTYPE,ZONING_BASE', coordinates, signal))[0]
+        if (!attributes) return { available: false, provenance: AUSTIN_ZONING_PROVENANCE, error: 'No Austin zoning district was returned at this point.' }
+        return { available: true, value: { zoningCode: String(attributes.ZONING_ZTYPE || ''), baseDistrict: String(attributes.ZONING_BASE || ''), jurisdiction: 'City of Austin, TX' } satisfies ZoningData, provenance: AUSTIN_ZONING_PROVENANCE }
+      } catch (error) {
+        return { available: false, provenance: AUSTIN_ZONING_PROVENANCE, error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  }
+}
+
+function makeAustinElectricAdapter(): LocalAdapter {
+  return {
+    id: 'austin-tx-electric-service-area', category: 'utilityCapacity', jurisdiction: 'Austin Energy service area, TX', stateCode: 'TX', bounds: AUSTIN_BOUNDS,
+    async query(coordinates, signal) {
+      try {
+        const attributes = (await queryAustinLayer('https://maps.austintexas.gov/arcgis/rest/services/Shared/BoundariesGrids_2/MapServer/1', 'SERVICE_AREA', coordinates, signal))[0]
+        return { available: true, value: { utilityName: String(attributes?.SERVICE_AREA || 'Austin Energy'), utilityType: 'electric', inServiceArea: Boolean(attributes), jurisdiction: 'City of Austin, TX' } satisfies UtilityCapacityData, provenance: AUSTIN_ELECTRIC_PROVENANCE }
+      } catch (error) {
+        return { available: false, provenance: AUSTIN_ELECTRIC_PROVENANCE, error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  }
+}
+
 // Register the verified local adapters at app startup. Kept as an explicit
 // function rather than auto-registering at module load so that the registry
 // is empty in unit tests (localAdapters.test.ts expects "starts empty" by
@@ -366,4 +496,6 @@ export function registerDefaultLocalAdapters(): void {
   for (const spec of TX_COUNTY_EASEMENT_SPECS) {
     registerLocalAdapter(makeTexasCountyEasementAdapter(spec))
   }
+  registerLocalAdapter(makeAustinZoningAdapter())
+  registerLocalAdapter(makeAustinElectricAdapter())
 }

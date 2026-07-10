@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Layers, LoaderCircle, LocateFixed, MapPin, ScanLine, Search, X } from 'lucide-react'
 import L from 'leaflet'
 import { GeoJSON, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet'
+import { externalRequest } from '../data/externalRequest'
 import { findStateForPoint, getStateDefinition, getStateFeature, isPointInState } from '../data/states'
 import type { Coordinates, ParcelSelection } from '../types/site'
 import type { ParcelOverlayData } from '../data/parcelOverlayProvider'
@@ -160,7 +161,7 @@ export function MapExplorer({ stateCode, coordinates, parcel, parcelLoading, ove
         viewbox: `${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()},${bounds.getSouth()}`,
         bounded: '1', addressdetails: '1',
       })
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, { headers: { 'Accept-Language': 'en' } })
+      const response = await externalRequest(`https://nominatim.openstreetmap.org/search?${params}`, { headers: { 'Accept-Language': 'en' } })
       if (!response.ok) throw new Error('Search service unavailable')
       const data = await response.json() as SearchResult[]
       const inState = data.filter((result) => isPointInState({ lat: Number(result.lat), lng: Number(result.lon) }, stateCode)).slice(0, 5)

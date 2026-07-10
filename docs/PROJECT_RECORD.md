@@ -31,20 +31,20 @@ The score uses an agreed **hybrid gate + weighted score** model. First, hard gat
 - No legal access / no viable frontage
 - Mapped regulatory floodway in likely buildable core
 - No viable water / sewer / septic path
-- Severe on-site contamination flag *(not yet wired)*
-- Critical habitat / regulatory resource overlap requiring specialist review *(not yet wired)*
+- Severe on-site contamination flag (EPA FRS screen + parcel overlay)
+- Critical habitat / regulatory resource overlap requiring specialist review (USFWS ECOS + parcel overlay)
 - Net developable acreage below minimum viable yield for the intended product
 
 ### Weighted core categories (weights sum to 100)
 
 | Category | Weight | Source status |
 | --- | ---: | --- |
-| Zoning & entitlement fit | 12 | User-supplied zoning notes (official zoning atlas is a planned adapter) |
-| Net developable acreage & yield | 9 | User-supplied gross acres (parcel-wide overlays are a planned later phase) |
+| Zoning & entitlement fit | 12 | User-supplied notes + City of Austin official zoning atlas where covered |
+| Net developable acreage & yield | 9 | Parcel-wide constraint overlays when parcel geometry is available; user gross acres otherwise |
 | FEMA floodplain & floodway | 10 | FEMA NFHL (live) |
 | Wetlands, waters & buffers | 10 | FWS NWI (live) |
 | Slope, relief & pad area | 8 | USGS 3DEP / EPQS (live) |
-| Utilities availability & capacity | 10 | EPA SDWIS water service areas (live) + user-supplied |
+| Utilities availability & capacity | 10 | EPA SDWIS water service areas (live), Austin Energy service area where covered, + user-supplied |
 | Access, frontage & roadway context | 7 | Census TIGERweb (live) + user frontage |
 | Soils & geotech suitability | 8 | USDA NRCS SSURGO / Soil Data Access (live, point-based) |
 | Stormwater & outfall feasibility | 7 | USGS 3DEP drainage proxy (live, 8-direction elevation analysis) |
@@ -162,10 +162,11 @@ Completed:
 - **Optional public-source trend:** 2019–2024 ACS 5-year tract population change when a Census API key is configured.
 - **User supplied:** acres, price, intended use, stated road frontage, stated utility proximity, zoning notes, and personal notes. These are not independently verified.
 - **Never fabricated:** if an official service fails, lacks coverage, or is not configured, its category is shown as unavailable and excluded from the weighted calculation. LandLens requires at least 50% weighted evidence before displaying an overall score.
-- **Parcel coverage:** exact point-in-polygon matches are connected for AK, AR, AZ, CO, CT, DE, FL, HI, ID, IN, MA, ME, MN, MT, NC, ND, NE, NH, NJ, NY, NV, OH, TN, UT, VA, VT, WA, WV, and WI through official statewide or statewide-mosaic services. Arizona includes verified local coverage from Maricopa County. Texas has verified local coverage from Travis, Dallas, Harris, Bexar, Collin, Williamson, Montgomery, and Tarrant sources. State mosaics can contain local gaps. Name and assessor acreage are filled only from returned official fields; when acreage is absent, LandLens calculates mapped acreage from the returned official polygon and labels it as mapped.
-- **Unavailable:** authoritative nationwide parcel boundaries, parcel ownership verification, legal access, zoning, utility capacity, comparable sales, project-specific market feasibility, and net buildable acreage.
+- **Parcel coverage:** 55 verified adapters cover 35 states, including statewide/mosaic sources and targeted county layers. California, Kansas, and Mississippi remain unsupported. State mosaics and county layers can contain local gaps. Name and assessor acreage are filled only from returned official fields; when acreage is absent, LandLens calculates mapped acreage from the returned official polygon and labels it as mapped.
+- **Local entitlement/utility evidence:** City of Austin zoning and Austin Energy electric-service-area adapters are registered within their published coverage. They are screening evidence only; local code, overlays, will-serve letters, and capacity confirmation remain controlling.
+- **Unavailable:** authoritative nationwide parcel boundaries, parcel ownership verification, legal access, utility capacity commitments, comparable sales, project-specific market feasibility, and survey/engineering-grade net buildable acreage.
 - **All 13 scoring categories are now wired to data sources.** Stormwater uses a USGS drainage proxy. Easements uses a local adapter framework that returns "unavailable — title/ALTA required" when no local GIS adapter is registered for the jurisdiction.
-- **Important remaining limitation:** soils, stormwater, easements, contamination, and species now all run as parcel-wide overlays when a parcel boundary is loaded (NRCS SDA parcel polygon for soils, USGS 3DEP parcel grid shared with slope for stormwater, the verified Travis/Dallas/Harris/Bexar/Collin/Williamson/Montgomery/Tarrant Texas county parcel layers for easements, EPA FRS parcel polygon for contamination, and USFWS ECOS parcel-grid intersection for critical habitat). The grid sampling approach is a screening approximation, not survey-grade. Setbacks and buffers are not yet subtracted from net developable acreage. Moderate soils are not subtracted from net developable acreage at the screening stage. Contamination and critical habitat are hard gates and are intentionally NOT subtracted from net developable acreage. Several federal APIs may have CORS limitations when called directly from the browser; a backend proxy would resolve these for production.
+- **Important remaining limitation:** soils, stormwater, easements, contamination, and species now all run as parcel-wide overlays when a parcel boundary is loaded (NRCS SDA parcel polygon for soils, USGS 3DEP parcel grid shared with slope for stormwater, the verified Travis/Dallas/Harris/Bexar/Collin/Williamson/Montgomery/Tarrant Texas county parcel layers for easements, EPA FRS parcel polygon for contamination, and USFWS ECOS parcel-grid intersection for critical habitat). The grid sampling approach is a screening approximation, not survey-grade. Setbacks and buffers are subtracted from net developable acreage. Moderate soils are not subtracted at the screening stage. Contamination and critical habitat are hard gates and are intentionally NOT subtracted from net developable acreage. The included allow-listed backend proxy/cache resolves browser CORS limitations when deployed and configured; provider uptime and data licenses still require monitoring.
 - Public geocoding and tile services have usage policies and are suitable for this demo, not an unbounded production workload. Production should use an appropriately licensed provider or hosted service.
 
 ## Prepared future integrations
@@ -183,12 +184,12 @@ The official-data provider, scoring layer, and parcel-provider interface are sep
 ## Recommended next backlog
 
 1. ~~Run FEMA, wetlands, terrain, setbacks, and easement overlays across the loaded parcel to calculate net buildable acreage.~~ **Done for FEMA/NWI/slope (Phase 3). Hydric/severe soils and recorded easements added (Phase 8). Perimeter setbacks added (Phase 12). All six land-use constraints are now subtracted from net developable acreage.**
-2. Add a backend cache/proxy for public services, rate limiting, monitoring, and credentials. This would resolve CORS limitations for USDA SDA, EPA FRS, USFWS ECOS, NOAA SLR, USFS WHP, and EPA radon.
+2. ~~Add a backend cache/proxy for public services, rate limiting, monitoring, and credentials.~~ **Done for the production service boundary (v1): `server/data-proxy.mjs` has an allow-list, bounded cache, request-size limits, timeouts, per-client rate limiting, CORS configuration, and `/health`; deploy it with `VITE_DATA_PROXY_URL`. Platform monitoring and alert routing remain deployment configuration.**
 3. Add USDA SSURGO ~~soils and~~ subtract hydric/severe soils from net developable acreage. ~~A net-buildable-acre calculation that subtracts floodway, wetlands, steep slope, setbacks, and easements.~~ **Done (Phase 8): parcel-wide soil overlay and hydric/severe subtraction are wired; moderate soils are not subtracted at the screening stage.**
 4. ~~Add EPA Envirofacts / UST Finder for contamination screening and USFWS IPaC / ECOS for species/historic screening.~~ **Done (Phase 4).**
-5. Add zoning/future-land-use and utility-capacity adapters jurisdiction by jurisdiction. **Local adapter framework in place (Phase 6); register specific jurisdictions as needed.**
+5. Add zoning/future-land-use and utility-capacity adapters jurisdiction by jurisdiction. **Started in v1: City of Austin zoning and Austin Energy service-area adapters are registered. Future-land-use, water/sewer capacity, legal access, and more jurisdictions remain.**
 6. Add intended-use-specific market and financial models instead of using population and permits as the sole market signals. **Partially addressed (Phase 10): `marketMetric` is now intended-use-aware — `residential`/`mixed-use` get full BPS permit-trend credit because Census BPS measures residential-structure permits; `commercial`/`industrial`/`other` get a capped permit contribution plus a surfaced unknown recommending an intended-use-specific market study. True intended-use models (commercial rents/vacancy, industrial lease rates/employment) still require a market-data adapter and are deferred.**
-7. ~~Add automated provider-contract tests and browser tests for the critical map-save-compare-report flow.~~ **84 automated tests added (Phase 7 + 8 + 9 + 10 + 11): geometry, scoring, storage migration, local adapter registry, parcelOverlayProvider compute functions (slope, stormwater, easements, net developable, WKT). Browser E2E tests still deferred.**
+7. ~~Add automated provider-contract tests and browser tests for the critical map-save-compare-report flow.~~ **Done in v1: 88 unit/provider tests plus Playwright save → compare → report coverage. `npm run verify:providers` performs live contract checks against FEMA, USGS, City of Austin zoning, and Austin Energy. Expand the live check set as new providers are registered.**
 8. ~~Add NOAA sea-level rise, USFS wildfire risk, and EPA radon as a 0 to −5 regional hazard modifier.~~ **Done (Phase 5).**
 9. Register local easement/ROW adapters for high-priority jurisdictions (e.g. major Texas counties, Florida, California). **Travis County, TX easement adapter registered (Phase 8). All eight verified Texas county parcel layers — Travis, Dallas, Harris, Bexar, Collin, Williamson, Montgomery, Tarrant — now have easement adapters registered (Phase 9).**
 10. ~~Add parcel-wide soils and stormwater overlays to complement the existing FEMA/NWI/slope parcel overlays.~~ **Done (Phase 8).**
@@ -196,6 +197,13 @@ The official-data provider, scoring layer, and parcel-provider interface are sep
 12. ~~Jurisdiction-specific setback overlays for the net developable acreage calculation (setbacks are still explicitly NOT subtracted).~~ **Done (Phase 12): perimeter setback overlay uses conservative US-default distances by intended use (residential 20 ft, mixed-use 25 ft, commercial 30 ft, industrial 40 ft, other 20 ft). Distances are screening defaults — local zoning ordinances may differ. Front/side/rear distinction is not yet wired (requires road-context analysis).**
 
 ## Change log
+
+### 2026-07-10 — v1 production readiness, local decision data, and test coverage
+
+- **Release stabilization:** fixed the pending lazy-loaded report/saved-site chunk configuration; lint, TypeScript, and production builds now pass. README and this record reflect 88 unit/provider tests, 35-state / 55-adapter parcel coverage, and the completed overlay/hard-gate work.
+- **Production data boundary:** added `src/data/externalRequest.ts` and migrated every third-party browser request through it. `server/data-proxy.mjs` is a no-dependency Node service with an explicit host allow-list, five-minute bounded response cache, per-client rate limit, request-body/URL limits, timeout, CORS configuration, and health endpoint. Production builds opt in with `VITE_DATA_PROXY_URL`; local direct requests remain possible for development.
+- **Local decision data:** registered two verified City of Austin services under the existing local-adapter registry: zoning district lookup feeds the zoning/entitlement metric conservatively, and Austin Energy’s electric-service boundary supplements EPA water-service screening. Neither adapter represents a legal-use or capacity commitment; their score details surface the appropriate municipal-code and will-serve caveats.
+- **Automated confidence:** added Playwright Chromium coverage for the saved-site workflow (save → compare → report) and a live provider-contract command checking FEMA NFHL, USGS elevation, Austin zoning, and Austin Energy. Added Playwright output exclusions to Git.
 
 ### 2026-07-07 — Expand parcel coverage to 30 states (VA, NV, AZ Maricopa County)
 

@@ -87,8 +87,30 @@ function userMetric(category: ScoreCategory, score: number, displayValue: string
 
 // ---------- Per-category metric builders ----------
 
-function zoningMetric(inputs: SiteInputs): MetricResult {
+function zoningMetric(inputs: SiteInputs, official?: OfficialSiteData['zoning']): MetricResult {
   const notes = inputs.zoningNotes.trim()
+  if (official?.available && official.value) {
+    const code = official.value.zoningCode || official.value.baseDistrict || 'Unlabeled district'
+    const base = official.value.baseDistrict || code
+    const residential = /^(SF|MF|RM|MH|P)/i.test(base)
+    const commercial = /^(CS|CH|GR|LR|GO|LO|NO|CR|CBD|DMU|MU)/i.test(base)
+    const industrial = /^(LI|IP|MI)/i.test(base)
+    const mixed = /^(MU|DMU|CS-MU|GR-MU)/i.test(base)
+    const likelyCompatible = inputs.intendedUse === 'residential' ? (residential || mixed)
+      : inputs.intendedUse === 'commercial' ? (commercial || mixed)
+        : inputs.intendedUse === 'mixed-use' ? mixed
+          : inputs.intendedUse === 'industrial' ? industrial
+            : true
+    const score = likelyCompatible ? 72 : 32
+    const userWarning = /\b(prohibit\w*|not allow\w*|not permit\w*)/i.test(notes)
+    return {
+      category: 'zoning', label: CATEGORY_LABELS.zoning, score: userWarning ? 15 : score, weight: CATEGORY_WEIGHTS.zoning,
+      status: 'official', provenance: official.provenance,
+      displayValue: `${code} · ${official.value.jurisdiction}`,
+      summary: userWarning ? 'Your zoning note says the intended use is likely prohibited.' : likelyCompatible ? `The mapped ${code} district is a preliminary match for ${inputs.intendedUse.replace('-', ' ')} use.` : `The mapped ${code} district is not an obvious preliminary match for ${inputs.intendedUse.replace('-', ' ')} use.`,
+      detail: `Official local zoning atlas result: ${code} (base district ${base}). LandLens uses a conservative district-family screen, not a legal use determination. Overlay districts, conditional-use rules, compatibility, parking, impervious-cover limits, subdivision plats, and adopted municipal code can change the outcome. Confirm by-right status with ${official.value.jurisdiction}.${notes ? ' Your supplied zoning note is retained as additional context.' : ''}`,
+    }
+  }
   if (!notes) {
     return missingMetric(
       'zoning',
@@ -243,7 +265,21 @@ function slopeMetric(data: OfficialSiteData['slope'] | undefined, overlay?: Parc
   }
 }
 
-function utilitiesMetric(inputs: SiteInputs, official?: OfficialSiteData['utilityService']): MetricResult {
+function utilitiesMetric(inputs: SiteInputs, official?: OfficialSiteData['utilityService'], local?: OfficialSiteData['localUtility']): MetricResult {
+  if (local?.available && local.value) {
+    const v = local.value
+    let score = v.inServiceArea ? 68 : 28
+    if (official?.available && official.value?.inWaterServiceArea) score = Math.max(score, 78)
+    if (inputs.utilitiesNearby === 'yes') score = Math.max(score, 80)
+    if (inputs.utilitiesNearby === 'no') score = Math.min(score, 35)
+    return {
+      category: 'utilities', label: CATEGORY_LABELS.utilities, score, weight: CATEGORY_WEIGHTS.utilities,
+      status: 'official', provenance: local.provenance,
+      displayValue: v.inServiceArea ? `${v.utilityName} ${v.utilityType} area` : `Outside mapped ${v.utilityName} area`,
+      summary: v.inServiceArea ? `The point falls within the mapped ${v.utilityName} ${v.utilityType} service area.${official?.available && official.value?.inWaterServiceArea ? ' EPA also maps public water service.' : ''}` : `The point is outside the mapped ${v.utilityName} ${v.utilityType} service area.`,
+      detail: `${v.utilityName}'s mapped ${v.utilityType} service area is a screening signal only. It does not prove capacity, allocation, extension cost, utility design, or a right to serve.${official?.available && official.value ? ' EPA water-service mapping is also available as supplemental evidence.' : ''} Obtain written will-serve and capacity letters before ranking or acquisition.`,
+    }
+  }
   // Prefer official EPA water service area data when available.
   if (official?.available && official.value) {
     const v = official.value
@@ -608,7 +644,7 @@ function evaluateHardGates(metrics: Record<ScoreCategory, MetricResult>, inputs:
       id: 'use-permitted',
       label: 'Use permitted & entitlement path clear',
       reason: 'Intended use is not clearly permitted under the site\'s zoning.',
-      triggered: metrics.zoning.status === 'user' && metrics.zoning.score !== null && metrics.zoning.score <= 20,
+      triggered: metrics.zoning.status !== 'unknown' && metrics.zoning.score !== null && metrics.zoning.score <= 20,
     },
     {
       id: 'legal-access',
@@ -703,12 +739,12 @@ function getVerdict(rawScore: number | null, scoredWeight: number, gatedToManual
 export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, official?: OfficialSiteData, hasParcelBoundary = false, overlays?: ParcelOverlayData | null, hazards?: RegionalHazardData | null): SiteAnalysis {
   const hasOverlays = Boolean(overlays)
   const metrics: Record<ScoreCategory, MetricResult> = {
-    zoning: zoningMetric(inputs),
+    zoning: zoningMetric(inputs, official?.zoning),
     netDevelopable: netDevelopableMetric(inputs, hasParcelBoundary, overlays),
     floodplain: floodplainMetric(official?.flood, overlays?.floodplain),
     wetlands: wetlandsMetric(official?.environmental, overlays?.wetlands),
     slope: slopeMetric(official?.slope, overlays?.slope),
-    utilities: utilitiesMetric(inputs, official?.utilityService),
+    utilities: utilitiesMetric(inputs, official?.utilityService, official?.localUtility),
     access: accessMetric(official?.road, inputs),
     soils: soilsMetric(official?.soils, overlays?.soils),
     stormwater: stormwaterMetric(official?.stormwater, overlays?.stormwater),

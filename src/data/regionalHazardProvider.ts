@@ -1,4 +1,5 @@
 import type { Coordinates, DataProvenance } from '../types/site'
+import { externalRequest } from './externalRequest'
 
 // ─── Types ──────────────────────────────────────────────────────────────
 
@@ -53,7 +54,7 @@ async function getJson<T>(url: string, signal?: AbortSignal, timeoutMs = 15_000)
   const abort = () => controller.abort()
   signal?.addEventListener('abort', abort, { once: true })
   try {
-    const response = await fetch(url, { signal: controller.signal })
+    const response = await externalRequest(url, { signal: controller.signal })
     if (!response.ok) throw new Error(`Source returned ${response.status}`)
     return await response.json() as T
   } finally {

@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { Bookmark, ChevronRight, FileText, Map, MapPin, Menu, Save, Scale, X } from 'lucide-react'
 import { MapExplorer } from './components/MapExplorer'
-import { SavedSites } from './components/SavedSites'
+const SavedSites = lazy(() => import('./components/SavedSites').then(m => ({ default: m.SavedSites })))
 import { ScorePanel } from './components/ScorePanel'
 import { SiteForm } from './components/SiteForm'
-import { SiteReport } from './components/SiteReport'
+const SiteReport = lazy(() => import('./components/SiteReport').then(m => ({ default: m.SiteReport })))
 import { fetchOfficialSiteData, type OfficialSiteData } from './data/officialDataProvider'
 import { fetchParcelAt, formatParcelAcres } from './data/parcelProvider'
 import { fetchParcelOverlays, computeSetbackOverlay, type ParcelOverlayData } from './data/parcelOverlayProvider'
@@ -39,7 +39,7 @@ function App() {
   const [overlaysLoading, setOverlaysLoading] = useState(false)
   const [hazards, setHazards] = useState<RegionalHazardData | null>(null)
   const [analysisLoading, setAnalysisLoading] = useState(true)
-  const [sourcesPending, setSourcesPending] = useState(5)
+  const [sourcesPending, setSourcesPending] = useState(14)
   const [parcel, setParcel] = useState<ParcelSelection>()
   const [parcelLoading, setParcelLoading] = useState(true)
   const [sites, setSites] = useState<SavedSite[]>(loadSites)
@@ -226,7 +226,7 @@ function App() {
     setOverlaysLoading(false)
     setParcelLoading(true)
     setAnalysisLoading(true)
-    setSourcesPending(12)
+    setSourcesPending(14)
     setAnalysis(analyzeSite(next, nextInputs))
     setCurrentId(null)
     setDirty(false)
@@ -271,7 +271,7 @@ function App() {
     setOverlaysLoading(false)
     setParcelLoading(true)
     setAnalysisLoading(true)
-    setSourcesPending(12)
+    setSourcesPending(14)
     setAnalysis(analyzeSite(state.center, nextInputs))
     setCurrentId(null)
     setDirty(false)
@@ -324,7 +324,7 @@ function App() {
     setOverlaysLoading(false)
     setParcelLoading(true)
     setAnalysisLoading(true)
-    setSourcesPending(12)
+    setSourcesPending(14)
     setAnalysis(site.analysis)
     setCurrentId(site.id)
     setDirty(false)
@@ -364,8 +364,8 @@ function App() {
     setMobileMenu(false)
   }
 
-  if (view === 'saved') return <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}><SavedSites sites={sites} onOpen={openSite} onReport={showReport} onDelete={deleteSite} onExplore={() => navigate('explorer')} />{toast && <Toast message={toast} />}</AppFrame>
-  if (view === 'report' && reportSite) return <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}><SiteReport site={reportSite} onBack={() => navigate(reportReturnView)} /></AppFrame>
+  if (view === 'saved') return <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}><Suspense fallback={<div className="lazy-loading">Loading…</div>}><SavedSites sites={sites} onOpen={openSite} onReport={showReport} onDelete={deleteSite} onExplore={() => navigate('explorer')} /></Suspense>{toast && <Toast message={toast} />}</AppFrame>
+  if (view === 'report' && reportSite) return <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}><Suspense fallback={<div className="lazy-loading">Loading…</div>}><SiteReport site={reportSite} onBack={() => navigate(reportReturnView)} /></Suspense></AppFrame>
 
   return (
     <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}>

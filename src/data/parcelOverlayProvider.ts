@@ -1,6 +1,7 @@
 import type { DataProvenance, IntendedUse, ScreeningArea } from '../types/site'
 import { boundaryAreaSquareMeters, boundaryToArcGISPolygon, gridSampleBoundary, pointInBoundary, pointToBoundaryDistanceMeters, pointToSegmentMeters, squareMetersToAcres, type GeoBoundary } from '../lib/geometry'
 import { fetchEasementsOverlayForParcel } from './localAdapters'
+import { externalRequest } from './externalRequest'
 
 // Accept the ScreeningArea boundary shape (which has a union type) and narrow
 // it to the GeoBoundary discriminated union used by geometry utilities.
@@ -247,7 +248,7 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const abort = () => controller.abort()
   signal?.addEventListener('abort', abort, { once: true })
   try {
-    const response = await fetch(url, { signal: controller.signal })
+    const response = await externalRequest(url, { signal: controller.signal })
     if (!response.ok) throw new Error(`Source returned ${response.status}`)
     const data = await response.json() as T & { error?: { message?: string } }
     if (data.error) throw new Error(data.error.message || 'Source query failed')
@@ -264,7 +265,7 @@ async function postJson<T>(url: string, body: unknown, signal?: AbortSignal, tim
   const abort = () => controller.abort()
   signal?.addEventListener('abort', abort, { once: true })
   try {
-    const response = await fetch(url, {
+    const response = await externalRequest(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

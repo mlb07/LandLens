@@ -1,4 +1,5 @@
 import type { Coordinates, DataProvenance, ParcelSelection, ScreeningArea } from '../types/site'
+import { externalRequest } from './externalRequest'
 
 interface GeoJsonFeature {
   type: 'Feature'
@@ -410,7 +411,7 @@ async function fetchJson<T>(url: string, timeoutMs: number, attempts = 2, signal
     const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
     signal?.addEventListener('abort', abort, { once: true })
     try {
-      const response = await fetch(url, { signal: controller.signal })
+      const response = await externalRequest(url, { signal: controller.signal })
       if (!response.ok) throw new Error(`Parcel service returned ${response.status}`)
       return await response.json() as T
     } catch (error) {

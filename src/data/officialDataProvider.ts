@@ -1,7 +1,8 @@
 import type { Coordinates, DataProvenance } from '../types/site'
 import { fetchBps, fetchContamination, fetchSoils, fetchSpecies, fetchUtilityService, type BpsObservation, type ContaminationObservation, type SoilsObservation, type SpeciesObservation, type UtilityObservation } from './nationalAdapters'
-import { fetchEasements, type EasementsObservation } from './localAdapters'
+import { fetchEasements, fetchUtilityCapacity, fetchZoningAtlas, type EasementsObservation, type UtilityCapacityObservation, type ZoningObservation } from './localAdapters'
 import { fetchStormwater, type StormwaterObservation } from './stormwaterProvider'
+import { externalRequest } from './externalRequest'
 
 export interface OfficialObservation<T> {
   available: boolean
@@ -47,10 +48,12 @@ export interface OfficialSiteData {
   bps: BpsObservation
   stormwater: StormwaterObservation
   easements: EasementsObservation
+  zoning?: ZoningObservation
+  localUtility?: UtilityCapacityObservation
   fetchedAt: string
 }
 
-export type OfficialCategory = 'flood' | 'slope' | 'road' | 'demographics' | 'environmental' | 'soils' | 'contamination' | 'species' | 'utilityService' | 'bps' | 'stormwater' | 'easements'
+export type OfficialCategory = 'flood' | 'slope' | 'road' | 'demographics' | 'environmental' | 'soils' | 'contamination' | 'species' | 'utilityService' | 'bps' | 'stormwater' | 'easements' | 'zoning' | 'localUtility'
 
 export interface OfficialSiteProgress {
   data: OfficialSiteData
@@ -109,7 +112,7 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
     const abort = () => controller.abort()
     signal?.addEventListener('abort', abort, { once: true })
     try {
-      const response = await fetch(url, { signal: controller.signal })
+      const response = await externalRequest(url, { signal: controller.signal })
       if (!response.ok) throw new Error(`Source returned ${response.status}`)
       const data = await response.json() as T & { error?: { message?: string } }
       if (data.error) throw new Error(data.error.message || 'Source query failed')
@@ -325,9 +328,11 @@ export async function fetchOfficialSiteData(coordinates: Coordinates, signal?: A
     bps: { available: false, provenance: { source: 'Census BPS', sourceUrl: '' }, error: 'Source check is still in progress' },
     stormwater: { available: false, provenance: { source: 'USGS 3DEP drainage', sourceUrl: '' }, error: 'Source check is still in progress' },
     easements: { available: false, provenance: { source: 'Local GIS', sourceUrl: '' }, error: 'Source check is still in progress' },
+    zoning: { available: false, provenance: { source: 'Local zoning atlas', sourceUrl: '' }, error: 'Source check is still in progress' },
+    localUtility: { available: false, provenance: { source: 'Local utility service area', sourceUrl: '' }, error: 'Source check is still in progress' },
     fetchedAt: new Date().toISOString(),
   }
-  const remaining = new Set<OfficialCategory>(['flood', 'slope', 'road', 'demographics', 'environmental', 'soils', 'contamination', 'species', 'utilityService', 'bps', 'stormwater', 'easements'])
+  const remaining = new Set<OfficialCategory>(['flood', 'slope', 'road', 'demographics', 'environmental', 'soils', 'contamination', 'species', 'utilityService', 'bps', 'stormwater', 'easements', 'zoning', 'localUtility'])
   const publish = <K extends OfficialCategory>(category: K, observation: OfficialSiteData[K]) => {
     data = { ...data, [category]: observation, fetchedAt: new Date().toISOString() }
     remaining.delete(category)
@@ -347,6 +352,8 @@ export async function fetchOfficialSiteData(coordinates: Coordinates, signal?: A
     fetchBps(coordinates, signal).then((value) => publish('bps', value)),
     fetchStormwater(coordinates, signal).then((value) => publish('stormwater', value)),
     fetchEasements(coordinates, stateCode || 'XX', signal).then((value) => publish('easements', value)),
+    fetchZoningAtlas(coordinates, stateCode || 'XX', signal).then((value) => publish('zoning', value)),
+    fetchUtilityCapacity(coordinates, stateCode || 'XX', signal).then((value) => publish('localUtility', value)),
   ])
   officialDataCache.set(cacheKey, { data, expiresAt: Date.now() + 10 * 60_000 })
   return data

@@ -413,3 +413,13 @@
   .report-title { padding-block: 18px; }
   .report-footer { margin-top: 18px; }
 }
+
+.lazy-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 50vh;
+  font-size: 1.1rem;
+  color: var(--text-dim, #8a9bae);
+  letter-spacing: 0.03em;
+}
