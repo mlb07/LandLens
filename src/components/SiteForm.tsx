@@ -1,8 +1,11 @@
 import { BadgeCheck, Calculator, ChevronDown, Info, MapPinned } from 'lucide-react'
-import type { IntendedUse, JurisdictionProfile, ParcelSelection, SiteInputs, TriState } from '../types/site'
+import type { IntendedUse, JurisdictionAuthority, JurisdictionProfile, NationalContextFinding, ParcelSelection, SiteInputs, TriState } from '../types/site'
 import { JurisdictionPanel } from './JurisdictionPanel'
 import { ParcelFactsPanel } from './ParcelFactsPanel'
-import { AUSTIN_PROPOSED_USES, getAustinProposedUseDefinition } from '../data/austinPermittedUses'
+import { getJurisdictionPack, getJurisdictionProposedUseDefinition, getJurisdictionProposedUses } from '../data/jurisdictions/registry'
+import type { CoverageTelemetry } from '../data/coverageProvider'
+import { CoveragePanel } from './CoveragePanel'
+import { NationalContextPanel } from './NationalContextPanel'
 
 const intendedUses: Array<{ value: IntendedUse; label: string }> = [
   { value: 'residential', label: 'Residential' },
@@ -27,10 +30,13 @@ function TriStateField({ label, value, onChange }: { label: string; value: TriSt
   )
 }
 
-export function SiteForm({ inputs, parcel, jurisdiction, onChange, onAnalyze, dirty }: {
+export function SiteForm({ inputs, parcel, jurisdiction, authority, coverage, nationalContext, onChange, onAnalyze, dirty }: {
   inputs: SiteInputs
   parcel?: ParcelSelection
   jurisdiction?: JurisdictionProfile
+  authority?: JurisdictionAuthority
+  coverage?: CoverageTelemetry
+  nationalContext?: NationalContextFinding[]
   onChange: (inputs: SiteInputs) => void
   onAnalyze: () => void
   dirty: boolean
@@ -44,7 +50,7 @@ export function SiteForm({ inputs, parcel, jurisdiction, onChange, onAnalyze, di
       onChange({ ...inputs, proposedUse: undefined })
       return
     }
-    const definition = getAustinProposedUseDefinition(value as NonNullable<SiteInputs['proposedUse']>)
+    const definition = getJurisdictionProposedUseDefinition(jurisdiction, value)
     onChange({ ...inputs, proposedUse: definition?.key, intendedUse: definition?.intendedUse ?? inputs.intendedUse })
   }
 
@@ -60,11 +66,15 @@ export function SiteForm({ inputs, parcel, jurisdiction, onChange, onAnalyze, di
         <p>Enter what you have. Unknown answers are acceptable and will lower confidence—not secretly count as facts.</p>
       </div>
 
+      {coverage && <CoveragePanel coverage={coverage} />}
+
+      <NationalContextPanel findings={nationalContext} />
+
       {parcel?.status === 'found' && <div className="parcel-autofill-note"><BadgeCheck size={15} /><div><strong>Official parcel match</strong><span>{parcel.acreageKind === 'assessor' ? 'Name and acreage came from official parcel attributes.' : 'Name came from the parcel record when available; mapped acreage was calculated from the returned official boundary.'} Review before relying on them.</span></div></div>}
 
       {parcel?.status === 'found' && <ParcelFactsPanel facts={parcel.facts} provenance={parcel.provenance} />}
 
-      {jurisdiction && <JurisdictionPanel profile={jurisdiction} intendedUse={inputs.intendedUse} proposedUse={inputs.proposedUse} />}
+      {(jurisdiction || authority) && <JurisdictionPanel profile={jurisdiction} authority={authority} intendedUse={inputs.intendedUse} proposedUse={inputs.proposedUse} />}
 
       <div className="form-grid">
         <label className="field field-full">
@@ -92,20 +102,20 @@ export function SiteForm({ inputs, parcel, jurisdiction, onChange, onAnalyze, di
             <ChevronDown size={16} />
           </div>
         </label>
-        {jurisdiction?.profileId === 'austin-travis-v1' && <label className="field field-full proposed-use-field">
-          <span>Austin proposed-use detail <em>Optional</em></span>
+        {jurisdiction && getJurisdictionProposedUses(jurisdiction).length > 0 && <label className="field field-full proposed-use-field">
+          <span>{getJurisdictionPack(jurisdiction)?.proposedUseLabel ?? 'Proposed-use detail'} <em>Optional</em></span>
           <div className="select-wrap">
-            <select data-testid="austin-proposed-use" value={inputs.proposedUse ?? ''} onChange={(event) => selectProposedUse(event.target.value)}>
+            <select data-testid="proposed-use" value={inputs.proposedUse ?? ''} onChange={(event) => selectProposedUse(event.target.value)}>
               <option value="">Use broad intended-use screening</option>
-              {(['Residential', 'Commercial', 'Industrial', 'Agricultural & civic'] as const).map((group) => (
+              {Array.from(new Set(getJurisdictionProposedUses(jurisdiction).map((use) => use.group))).map((group) => (
                 <optgroup label={group} key={group}>
-                  {AUSTIN_PROPOSED_USES.filter((use) => use.group === group).map((use) => <option key={use.key} value={use.key}>{use.label}</option>)}
+                  {getJurisdictionProposedUses(jurisdiction).filter((use) => use.group === group).map((use) => <option key={use.key} value={use.key}>{use.label}</option>)}
                 </optgroup>
               ))}
             </select>
             <ChevronDown size={16} />
           </div>
-          <small>Checks the selected use against Austin LDC §25-2-491. Other code provisions and overlays can supersede the base table.</small>
+          <small>{getJurisdictionPack(jurisdiction)?.proposedUseHelpText ?? 'Checks the selected use against the registered local use table. Other code provisions and overlays may supersede the result.'}</small>
         </label>}
         <TriStateField label="Road frontage" value={inputs.roadFrontage} onChange={(value) => update('roadFrontage', value)} />
         <TriStateField label="Utilities nearby" value={inputs.utilitiesNearby} onChange={(value) => update('utilitiesNearby', value)} />

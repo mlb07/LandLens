@@ -1,8 +1,8 @@
 import type { OfficialSiteData } from '../data/officialDataProvider'
 import type { ParcelOverlayData, SoilsOverlay, StormwaterOverlay, EasementsOverlay, ContaminationOverlay, SpeciesOverlay } from '../data/parcelOverlayProvider'
 import type { RegionalHazardData } from '../data/regionalHazardProvider'
-import type { Coordinates, HardGate, IntendedUse, MetricResult, ParcelSelection, ScoreCategory, SiteAnalysis, SiteInputs, VerdictTone } from '../types/site'
-import { assessAustinProposedUse } from '../data/austinPermittedUses'
+import type { Coordinates, HardGate, IntendedUse, MetricResult, NationalContextFinding, ParcelSelection, ScoreCategory, SiteAnalysis, SiteInputs, VerdictTone } from '../types/site'
+import { assessJurisdictionProposedUse } from '../data/jurisdictions/registry'
 
 // Core weighted categories — weights sum to 100. See docs/PROJECT_RECORD.md.
 export const CATEGORY_WEIGHTS: Record<ScoreCategory, number> = {
@@ -99,7 +99,7 @@ function zoningMetric(inputs: SiteInputs, official?: OfficialSiteData['zoning'],
     const { code, base, jurisdiction, provenance, profile } = mappedZoning
     const userWarning = /\b(prohibit\w*|not allow\w*|not permit\w*)/i.test(notes)
     if (profile) {
-      const proposedUse = assessAustinProposedUse(profile, inputs.proposedUse)
+      const proposedUse = assessJurisdictionProposedUse(profile, inputs.proposedUse)
       if (proposedUse) {
         const score = proposedUse.status === 'permitted'
           ? (proposedUse.requiresCombiningDistrictReview || proposedUse.requiresOverlayReview ? 74 : 86)
@@ -132,7 +132,7 @@ function zoningMetric(inputs: SiteInputs, official?: OfficialSiteData['zoning'],
       const statusSummary = status === 'likely-compatible'
         ? `The ${base} district family is a preliminary match for ${inputs.intendedUse.replace('-', ' ')} use.`
         : status === 'conditional-review'
-          ? `The exact ${inputs.intendedUse.replace('-', ' ')} use needs Austin's permitted-use chart and site-specific review.`
+          ? `The exact ${inputs.intendedUse.replace('-', ' ')} use needs the jurisdiction's permitted-use table and site-specific review.`
           : status === 'likely-incompatible'
             ? `The ${base} district family is a likely conflict for ${inputs.intendedUse.replace('-', ' ')} use.`
             : 'Jurisdiction or special-district rules prevent an automated use screen.'
@@ -144,7 +144,7 @@ function zoningMetric(inputs: SiteInputs, official?: OfficialSiteData['zoning'],
         status: 'official', provenance,
         displayValue: `${code} · ${profile.jurisdictionLabel}`,
         summary: userWarning ? 'Your zoning note says the intended use is likely prohibited.' : statusSummary,
-        detail: `Official Austin profile: ${code} (base ${base}); ${profile.jurisdictionType}. ${profile.overlays.length ? `${profile.overlays.length} high-impact mapped overlay${profile.overlays.length === 1 ? '' : 's'} detected. ` : ''}${profile.futureLandUse ? `Future land use: ${profile.futureLandUse}. ` : ''}This is a district-family screen, not a §25-2-491 permitted-use determination.${standardsDetail}${notes ? ' Your supplied zoning note is retained as additional context.' : ''}`,
+        detail: `Official ${profile.profileLabel ?? 'local jurisdiction'} profile: ${code} (base ${base}); ${profile.jurisdictionType}. ${profile.overlays.length ? `${profile.overlays.length} high-impact mapped overlay${profile.overlays.length === 1 ? '' : 's'} detected. ` : ''}${profile.futureLandUse ? `Future land use: ${profile.futureLandUse}. ` : ''}This is a district-family screen, not a legal permitted-use determination.${standardsDetail}${notes ? ' Your supplied zoning note is retained as additional context.' : ''}`,
       }
     }
     const residential = /^(SF|MF|RM|MH|P)/i.test(base)
@@ -195,10 +195,13 @@ function netDevelopableMetric(inputs: SiteInputs, hasParcelBoundary: boolean, ov
     const subtractedSetbacks = nd.setbackAcres > 0
     const localSetbacks = overlays?.setback.value?.standardsSource === 'jurisdiction-code'
     const setbackStatement = localSetbacks ? 'Setbacks use the mapped jurisdiction base-district distances; verify all superseding controls.' : 'Setbacks use conservative US-default distances by intended use; verify with the local zoning ordinance.'
-    const breakdown = `Gross ${nd.grossAcres} ac minus floodway ${nd.floodwayAcres} ac, wetlands ${nd.wetlandAcres} ac, steep slope (>20%) ${nd.steepSlopeAcres} ac${subtractedSoils ? `, hydric/severe soils ${nd.soilConstrainedAcres} ac` : ''}${subtractedEasements ? `, mapped easements/ROW ${nd.easementAcres} ac` : ''}${subtractedSetbacks ? `, perimeter setbacks ${nd.setbackAcres} ac` : ''} = constrained ${nd.constrainedAcres} ac. Net developable ${nd.netDevelopableAcres} ac. Based on ${nd.samplePoints} grid sample points. ${setbackStatement}`
+    const methodStatement = nd.method === 'shared-grid-union'
+      ? 'Spatial takeouts are unioned cell-by-cell, so overlaps are counted once; non-spatial soil/title shares are then applied once as aggregate adjustments.'
+      : 'Legacy saved result uses an independence estimate because cell-level evidence was not retained.'
+    const breakdown = `Gross ${nd.grossAcres} ac. Individual screening shares: floodway ${nd.floodwayAcres} ac, wetlands ${nd.wetlandAcres} ac, steep slope (>20%) ${nd.steepSlopeAcres} ac${subtractedSoils ? `, hydric/severe soils ${nd.soilConstrainedAcres} ac` : ''}${subtractedEasements ? `, easements/ROW ${nd.easementAcres} ac` : ''}${subtractedSetbacks ? `, perimeter setbacks ${nd.setbackAcres} ac` : ''}. Combined constrained ${nd.constrainedAcres} ac; adjusted net ${nd.netDevelopableAcres} ac. ${methodStatement} Based on ${nd.samplePoints} parcel grid points. ${setbackStatement}`
     return {
       category: 'netDevelopable', label: CATEGORY_LABELS.netDevelopable, score, weight: CATEGORY_WEIGHTS.netDevelopable,
-      status: 'official', provenance: { source: 'Parcel overlay calculation', sourceUrl: '#', vintage: 'Computed from FEMA, NWI, USGS, NRCS soils, local easements, and perimeter setback overlays', coverageNote: `Net developable is gross acres minus the union of floodway, wetlands, steep slope (>20%), hydric/severe soils${subtractedEasements ? ', recorded easements' : ''}, and perimeter setbacks. ${setbackStatement}` },
+      status: 'official', provenance: { source: 'LandLens shared-grid buildable-envelope calculation', sourceUrl: '#', vintage: 'Computed from FEMA, NWI, USGS, NRCS soils, local easements, and perimeter setback overlays', coverageNote: `Spatial constraints are unioned on one parcel grid. NRCS soil shares and unmapped recorded-easement flags are non-spatial aggregate adjustments, not drawn geometry. ${setbackStatement}` },
       displayValue: `${nd.netDevelopableAcres} net / ${nd.grossAcres} gross`,
       summary: ratio >= 0.70 ? `Net developable ratio is ${Math.round(ratio * 100)}% — strong.` : ratio >= 0.50 ? `Net developable ratio is ${Math.round(ratio * 100)}% — workable but constrained.` : `Net developable ratio is ${Math.round(ratio * 100)}% — heavily constrained.`,
       detail: breakdown,
@@ -322,19 +325,20 @@ function slopeMetric(data: OfficialSiteData['slope'] | undefined, overlay?: Parc
   }
 }
 
-function utilitiesMetric(inputs: SiteInputs, official?: OfficialSiteData['utilityService'], local?: OfficialSiteData['localUtility'], parcel?: ParcelSelection): MetricResult {
+function utilitiesMetric(inputs: SiteInputs, official?: OfficialSiteData['utilityService'], sewer?: OfficialSiteData['sewerService'], local?: OfficialSiteData['localUtility'], parcel?: ParcelSelection): MetricResult {
   if (local?.available && local.value) {
     const v = local.value
     let score = v.inServiceArea ? 68 : 28
-    if (official?.available && official.value?.inWaterServiceArea) score = Math.max(score, 78)
+    if (official?.available && official.value?.inWaterServiceArea) score = Math.max(score, 76)
+    if (sewer?.available && sewer.value?.inMappedSewershed) score = Math.max(score, sewer.value.method === 'sourced' ? 78 : 72)
     if (inputs.utilitiesNearby === 'yes') score = Math.max(score, 80)
     if (inputs.utilitiesNearby === 'no') score = Math.min(score, 35)
     return {
       category: 'utilities', label: CATEGORY_LABELS.utilities, score, weight: CATEGORY_WEIGHTS.utilities,
       status: 'official', provenance: local.provenance,
       displayValue: v.inServiceArea ? `${v.utilityName} ${v.utilityType} area` : `Outside mapped ${v.utilityName} area`,
-      summary: v.inServiceArea ? `The point falls within the mapped ${v.utilityName} ${v.utilityType} service area.${official?.available && official.value?.inWaterServiceArea ? ' EPA also maps public water service.' : ''}` : `The point is outside the mapped ${v.utilityName} ${v.utilityType} service area.`,
-      detail: `${v.utilityName}'s mapped ${v.utilityType} service area is a screening signal only. It does not prove capacity, allocation, extension cost, utility design, or a right to serve.${official?.available && official.value ? ' EPA water-service mapping is also available as supplemental evidence.' : ''} Obtain written will-serve and capacity letters before ranking or acquisition.`,
+      summary: v.inServiceArea ? `The point falls within the mapped ${v.utilityName} ${v.utilityType} service area.${official?.available && official.value?.inWaterServiceArea ? ' EPA also maps public water.' : ''}${sewer?.available && sewer.value?.inMappedSewershed ? ' EPA also maps a sewershed.' : ''}` : `The point is outside the mapped ${v.utilityName} ${v.utilityType} service area.`,
+      detail: `${v.utilityName}'s mapped ${v.utilityType} service area is a screening signal only. It does not prove capacity, allocation, extension cost, utility design, or a right to serve.${official?.available && official.value ? ` EPA water mapping is ${official.value.boundaryMethod}.` : ''}${sewer?.available && sewer.value?.inMappedSewershed ? ` EPA's ${sewer.value.method} sewershed is supplemental evidence, not a connection record.` : ''} Obtain written will-serve and capacity letters before ranking or acquisition.`,
     }
   }
   const parcelServices = [parcel?.facts?.waterService, parcel?.facts?.sewerService, parcel?.facts?.utilities].filter(Boolean) as string[]
@@ -353,19 +357,23 @@ function utilitiesMetric(inputs: SiteInputs, official?: OfficialSiteData['utilit
       detail: `Parcel record utility fields: ${serviceText}. These attributes can be generalized, coded, or outdated. They do not prove capacity, allocation, connection location, extension cost, or a right to serve. Obtain written will-serve and capacity letters.`,
     }
   }
-  // Prefer official EPA water service area data when available.
-  if (official?.available && official.value) {
-    const v = official.value
-    let score = v.inWaterServiceArea ? 70 : 30
+  // Combine EPA water and wastewater screens without treating either as capacity.
+  if ((official?.available && official.value) || (sewer?.available && sewer.value)) {
+    const v = official?.value
+    const waterMapped = Boolean(v?.inWaterServiceArea)
+    const sewerMapped = Boolean(sewer?.value?.inMappedSewershed)
+    const sourcedWater = waterMapped && v?.boundaryMethod === 'sourced'
+    const sourcedSewer = sewerMapped && sewer?.value?.method === 'sourced'
+    let score = waterMapped && sewerMapped ? (sourcedWater && sourcedSewer ? 76 : 68) : waterMapped || sewerMapped ? (sourcedWater || sourcedSewer ? 64 : 56) : 30
     // Adjust based on user input if they also answered.
     if (inputs.utilitiesNearby === 'yes') score = Math.max(score, 75)
     if (inputs.utilitiesNearby === 'no') score = Math.min(score, 35)
     return {
       category: 'utilities', label: CATEGORY_LABELS.utilities, score, weight: CATEGORY_WEIGHTS.utilities,
-      status: 'official', provenance: official.provenance,
-      displayValue: v.inWaterServiceArea ? `In ${v.pwsName || 'EPA water service area'}` : 'Not in mapped water service area',
-      summary: v.inWaterServiceArea ? `EPA maps this point within a public water system service area (${v.pwsName || v.pwsId}).` : 'EPA does not map this point within a public water system service area.',
-      detail: `EPA explicitly states public water service area boundaries may differ from actual service areas. "In area" does not prove capacity, allocation, or extension cost. A will-serve / capacity letter from each provider is required before ranking.`,
+      status: 'official', provenance: waterMapped ? official?.provenance : sewer?.provenance,
+      displayValue: [waterMapped ? `${v?.pwsName || 'Mapped public water'} (${v?.boundaryMethod})` : '', sewerMapped ? `${sewer?.value?.facilityName || 'Mapped sewershed'} (${sewer?.value?.method})` : ''].filter(Boolean).join(' · ') || 'No EPA water or sewershed polygon',
+      summary: waterMapped || sewerMapped ? `EPA maps ${waterMapped ? 'public water' : ''}${waterMapped && sewerMapped ? ' and ' : ''}${sewerMapped ? 'a wastewater sewershed' : ''} at this point.` : 'EPA does not map a public-water service area or sewershed at this point.',
+      detail: `EPA boundaries may be modeled and may differ from actual service. A mapped area does not prove a parcel connection, capacity, allocation, extension cost, or a right to serve. Obtain written water and wastewater will-serve and capacity letters.`,
     }
   }
   // Fall back to user input.
@@ -817,6 +825,56 @@ function getVerdict(rawScore: number | null, scoredWeight: number, gatedToManual
   return band ? { verdict: band.verdict, verdictTone: band.tone } : { verdict: 'Not enough verified data', verdictTone: 'research' }
 }
 
+function buildNationalContext(official?: OfficialSiteData): NationalContextFinding[] {
+  const water = official?.utilityService
+  const sewer = official?.sewerService
+  const protectedLands = official?.protectedLands
+  const rail = official?.transportation
+  const broadband = official?.broadband
+  return [
+    {
+      id: 'drinking-water', label: 'Public drinking water',
+      status: !water?.available ? 'unavailable' : water.value?.inWaterServiceArea ? 'mapped' : 'not-mapped',
+      summary: !water?.available ? 'EPA water-service data unavailable.' : water.value?.inWaterServiceArea ? `${water.value.pwsName || water.value.pwsId || 'Public water system'} · ${water.value.boundaryMethod} boundary` : 'No EPA public-water service polygon at the point.',
+      detail: water?.value?.inWaterServiceArea ? `${water.value.populationServed?.toLocaleString() ?? 'Unknown'} reported population served · ${water.value.serviceConnections?.toLocaleString() ?? 'Unknown'} reported connections. This does not prove parcel service or capacity.` : water?.error || 'Absence may mean private well service, an unmapped system, or no public-water service.',
+      provenance: water?.provenance,
+      actionUrl: water?.value?.dataSourceUrl || water?.provenance.sourceUrl,
+    },
+    {
+      id: 'wastewater', label: 'Wastewater sewershed',
+      status: !sewer?.available ? 'unavailable' : sewer.value?.inMappedSewershed ? 'mapped' : 'not-mapped',
+      summary: !sewer?.available ? 'EPA sewershed data unavailable.' : sewer.value?.inMappedSewershed ? `${sewer.value.facilityName || sewer.value.cwnsId || 'Mapped sewershed'} · ${sewer.value.method}` : 'No EPA POTW sewershed polygon at the point.',
+      detail: sewer?.value?.inMappedSewershed ? `${sewer.value.npdesId ? `NPDES ${sewer.value.npdesId}. ` : ''}EPA says this is not an authoritative property connection record.` : sewer?.error || 'Private systems are excluded and national coverage is incomplete; verify with the local wastewater utility.',
+      provenance: sewer?.provenance,
+      actionUrl: sewer?.value?.echoUrl || sewer?.provenance.sourceUrl,
+    },
+    {
+      id: 'broadband', label: 'Broadband availability',
+      status: broadband?.available ? 'reference-only' : 'unavailable',
+      summary: broadband?.available ? 'FCC National Broadband Map lookup available.' : 'FCC broadband reference unavailable.',
+      detail: broadband?.available ? 'Exact provider-reported fixed availability remains in the FCC public map because the underlying Broadband Serviceable Location Fabric is licensed. Verify the address and challenge inaccuracies there.' : broadband?.error || 'FCC lookup could not be prepared.',
+      provenance: broadband?.provenance,
+      actionUrl: broadband?.value?.lookupUrl || broadband?.provenance.sourceUrl,
+    },
+    {
+      id: 'protected-lands', label: 'Protected lands and interests',
+      status: !protectedLands?.available ? 'unavailable' : protectedLands.value?.intersects ? 'mapped' : 'not-mapped',
+      summary: !protectedLands?.available ? 'PAD-US data unavailable.' : protectedLands.value?.intersects ? `${protectedLands.value.interests.length} PAD-US interest${protectedLands.value.interests.length === 1 ? '' : 's'} intersect the point.` : 'No PAD-US protected-area interest intersects the point.',
+      detail: protectedLands?.value?.intersects ? protectedLands.value.interests.slice(0, 3).map((item) => [item.unitName, item.featureClass, item.designationType, item.gapStatus ? `GAP ${item.gapStatus}` : ''].filter(Boolean).join(' · ')).join('; ') : protectedLands?.error || 'PAD-US is an aggregate and may lag the managing agency; title and local conservation records still control.',
+      provenance: protectedLands?.provenance,
+      actionUrl: protectedLands?.provenance.sourceUrl,
+    },
+    {
+      id: 'rail', label: 'Rail transportation context',
+      status: !rail?.available ? 'unavailable' : rail.value?.railWithinFiveKm ? 'mapped' : 'not-mapped',
+      summary: !rail?.available ? 'BTS rail data unavailable.' : rail.value?.railWithinFiveKm ? `${rail.value.nearestRailDistanceMeters?.toLocaleString()} m to mapped rail${rail.value.railOwner ? ` (${rail.value.railOwner})` : ''}.` : 'No BTS rail line within 5 km.',
+      detail: rail?.value?.railWithinFiveKm ? `${rail.value.passengerService || 'No passenger-service code'}${rail.value.strategicRailNetwork ? ' · STRACNET' : ''}. Proximity does not establish a siding, crossing, freight service, or legal access.` : rail?.error || 'The screen checks the current national rail network within five kilometers.',
+      provenance: rail?.provenance,
+      actionUrl: rail?.provenance.sourceUrl,
+    },
+  ]
+}
+
 // ---------- Main entry ----------
 
 export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, official?: OfficialSiteData, hasParcelBoundary = false, overlays?: ParcelOverlayData | null, hazards?: RegionalHazardData | null, parcel?: ParcelSelection): SiteAnalysis {
@@ -827,7 +885,7 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
     floodplain: floodplainMetric(official?.flood, overlays?.floodplain),
     wetlands: wetlandsMetric(official?.environmental, overlays?.wetlands),
     slope: slopeMetric(official?.slope, overlays?.slope),
-    utilities: utilitiesMetric(inputs, official?.utilityService, official?.localUtility, parcel),
+    utilities: utilitiesMetric(inputs, official?.utilityService, official?.sewerService, official?.localUtility, parcel),
     access: accessMetric(official?.road, inputs, parcel),
     soils: soilsMetric(official?.soils, overlays?.soils),
     stormwater: stormwaterMetric(official?.stormwater, overlays?.stormwater),
@@ -836,9 +894,10 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
     species: speciesMetric(official?.species, overlays?.species),
     market: marketMetric(inputs, official?.demographics, official?.bps),
   }
-  const exactAustinUse = official?.zoning?.value?.profile
-    ? assessAustinProposedUse(official.zoning.value.profile, inputs.proposedUse)
+  const exactJurisdictionUse = official?.zoning?.value?.profile
+    ? assessJurisdictionProposedUse(official.zoning.value.profile, inputs.proposedUse)
     : undefined
+  const nationalContext = buildNationalContext(official)
 
   const hardGates = evaluateHardGates(metrics, inputs, official, overlays)
   const triggeredGates = hardGates.filter((gate) => gate.triggered)
@@ -894,12 +953,13 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
   if (metrics.utilities.status === 'user' && metrics.utilities.score !== null && metrics.utilities.score >= 70) strengths.push('You indicated utilities are nearby.')
   if (metrics.zoning.status === 'user' && metrics.zoning.score !== null && metrics.zoning.score >= 80) strengths.push('Your zoning notes indicate a by-right permitted use.')
   if (!inputs.proposedUse && official?.zoning?.value?.profile?.useCompatibility[inputs.intendedUse] === 'likely-compatible') strengths.push(`The mapped ${official.zoning.value.profile.baseDistrict} district family is a preliminary match for the intended use.`)
-  if (exactAustinUse?.status === 'permitted') strengths.push(`${exactAustinUse.useLabel} is listed as permitted in the Austin ${exactAustinUse.district} base-use table.`)
+  if (exactJurisdictionUse?.status === 'permitted') strengths.push(`${exactJurisdictionUse.useLabel} is listed as permitted in the mapped ${exactJurisdictionUse.district} base-use table.`)
   if (metrics.netDevelopable.status === 'official' && metrics.netDevelopable.score !== null && metrics.netDevelopable.score >= 75) strengths.push(`Net developable acreage is strong at ${overlays?.netDevelopable?.netDevelopableAcres} ac (${Math.round((overlays?.netDevelopable?.netToGrossRatio ?? 0) * 100)}% of gross).`)
   else if (metrics.netDevelopable.status === 'user' && metrics.netDevelopable.score !== null && metrics.netDevelopable.score >= 75) strengths.push('Reported gross acreage is ample for the intended use.')
   if (metrics.soils.status === 'official' && metrics.soils.score !== null && metrics.soils.score >= 75) strengths.push('NRCS soil ratings are favorable for building and septic.')
   if (metrics.contamination.status === 'official' && metrics.contamination.score !== null && metrics.contamination.score >= 75) strengths.push('No EPA-regulated facilities within 1,000 meters.')
   if (metrics.species.status === 'official' && metrics.species.score !== null && metrics.species.score >= 75) strengths.push('No USFWS critical habitat intersects the selected point.')
+  if (official?.protectedLands?.available && official.protectedLands.value && !official.protectedLands.value.intersects) strengths.push('No PAD-US protected-area interest intersects the selected point.')
 
   if (overlays?.floodplain.value?.sfhaFraction ?? official?.flood.value?.sfha) {
     const pct = overlays?.floodplain.value ? ` ${Math.round(overlays.floodplain.value.sfhaFraction * 100)}%` : ''
@@ -914,16 +974,21 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
   if (metrics.utilities.status === 'user' && metrics.utilities.score !== null && metrics.utilities.score < 40) redFlags.push('You indicated utilities are not nearby.')
   if (metrics.zoning.status === 'user' && metrics.zoning.score !== null && metrics.zoning.score < 30) redFlags.push('Your zoning notes indicate the use may be prohibited or requires rezoning.')
   if (!inputs.proposedUse && official?.zoning?.value?.profile?.useCompatibility[inputs.intendedUse] === 'likely-incompatible') redFlags.push(`The mapped ${official.zoning.value.profile.baseDistrict} district family is a likely conflict for the intended use; confirm the exact use and entitlement path.`)
-  if (exactAustinUse?.status === 'prohibited') redFlags.push(`${exactAustinUse.useLabel} is not permitted in the mapped ${exactAustinUse.district} base-district table.`)
-  if (exactAustinUse?.status === 'conditional') redFlags.push(`${exactAustinUse.useLabel} requires a conditional use permit in the mapped ${exactAustinUse.district} base district.`)
-  if (exactAustinUse?.status === 'special-review') redFlags.push(`${exactAustinUse.useLabel} requires Austin footnote, special-district, or combining-district review.`)
-  if (official?.zoning?.value?.profile?.overlays.length) redFlags.push(`${official.zoning.value.profile.overlays.length} Austin zoning overlay${official.zoning.value.profile.overlays.length === 1 ? '' : 's'} may supersede the base-district screen.`)
+  if (exactJurisdictionUse?.status === 'prohibited') redFlags.push(`${exactJurisdictionUse.useLabel} is not permitted in the mapped ${exactJurisdictionUse.district} base-district table.`)
+  if (exactJurisdictionUse?.status === 'conditional') redFlags.push(`${exactJurisdictionUse.useLabel} requires a conditional use permit in the mapped ${exactJurisdictionUse.district} base district.`)
+  if (exactJurisdictionUse?.status === 'special-review') redFlags.push(`${exactJurisdictionUse.useLabel} requires footnote, special-district, or combining-district review.`)
+  if (official?.zoning?.value?.profile?.overlays.length) redFlags.push(`${official.zoning.value.profile.overlays.length} mapped zoning overlay${official.zoning.value.profile.overlays.length === 1 ? '' : 's'} may supersede the base-district screen.`)
   if (Number(inputs.acres) > 0 && Number(inputs.acres) < 1 && inputs.intendedUse !== 'residential') redFlags.push('Reported acreage may be too small for the intended non-residential use.')
   if (metrics.market.status === 'official' && metrics.market.score !== null && metrics.market.score < 50) redFlags.push('ACS tract population change is weak.')
   if (metrics.soils.status === 'official' && metrics.soils.score !== null && metrics.soils.score < 40) redFlags.push('NRCS soils ratings are severe for septic/dwelling — geotechnical review and perc testing are critical.')
   if (overlays?.soils.value && overlays.soils.value.severeFraction > 0.30) redFlags.push(`${Math.round(overlays.soils.value.severeFraction * 100)}% of the parcel has severe NRCS soil ratings — significant subtraction from net developable acreage.`)
   if (metrics.contamination.status === 'official' && metrics.contamination.score !== null && metrics.contamination.score < 40) redFlags.push('EPA-regulated facilities with major hazardous/toxic flags are within 1,000 meters.')
   if (metrics.species.status === 'official' && metrics.species.score !== null && metrics.species.score < 40) redFlags.push('The selected point intersects USFWS critical habitat — agency consultation is required.')
+  if (official?.protectedLands?.available && official.protectedLands.value?.intersects) {
+    const pad = official.protectedLands.value
+    const protection = pad.highestProtectionStatus ? ` (highest protection GAP ${pad.highestProtectionStatus})` : ''
+    redFlags.push(`USGS PAD-US maps ${pad.interests.length} protected-land, easement, or management interest${pad.interests.length === 1 ? '' : 's'} at the point${protection}. Confirm title and restrictions with the managing/source agency.`)
+  }
   if (hazards?.available) {
     for (const hazard of hazards.hazards) {
       if (!hazard.available || hazard.penalty >= 0) continue
@@ -939,14 +1004,17 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
     unknowns.push(`${metric.label} could not be verified from an official source.`)
   }
   if (inputs.utilitiesNearby === 'unknown') unknowns.push('Utility availability and capacity are unknown.')
+  if (official?.utilityService?.value?.boundaryMethod === 'modeled') unknowns.push('EPA drinking-water service at this point is based on a modeled boundary, not a utility-supplied boundary.')
+  if (official?.sewerService?.value?.method === 'modeled') unknowns.push('EPA wastewater coverage at this point is modeled and does not establish a parcel sewer connection.')
+  if (official?.broadband?.available) unknowns.push('Exact FCC provider and speed availability must be verified in the National Broadband Map; LandLens does not redistribute the licensed Location Fabric.')
   if (!official?.zoning?.available && !parcel?.facts?.zoning && !inputs.zoningNotes.trim()) unknowns.push('Zoning and future land use have not been verified.')
-  if (inputs.proposedUse && exactAustinUse?.status === 'unresolved') unknowns.push('The selected Austin proposed use could not be resolved for the mapped jurisdiction.')
+  if (inputs.proposedUse && exactJurisdictionUse?.status === 'unresolved') unknowns.push('The selected proposed use could not be resolved for the mapped jurisdiction.')
   if (inputs.roadFrontage === 'unknown') unknowns.push('Legal road frontage has not been verified.')
   if (metrics.market.status === 'official' && inputs.intendedUse !== 'residential' && inputs.intendedUse !== 'mixed-use') {
     unknowns.push(`Census BPS permits are a residential-structure signal; for ${inputs.intendedUse} use, a market study of ${inputs.intendedUse === 'commercial' ? 'retail/commercial rents, vacancy, and household income' : inputs.intendedUse === 'industrial' ? 'industrial vacancy, lease rates, and employment' : 'intended-use demand and absorption'} is still needed.`)
   }
   unknowns.push(hasOverlays
-    ? `Parcel-wide overlays are loaded for FEMA, NWI, slope, soils, stormwater, easements, EPA contamination, USFWS critical habitat, and perimeter setbacks. Net developable acreage subtracts the union of floodway, wetlands, steep slope, hydric/severe soils, mapped easements, and setbacks. Contamination and critical habitat are hard gates (not land-use takeouts) and are not subtracted from net developable acreage. ${overlays?.setback.value?.standardsSource === 'jurisdiction-code' ? 'Setbacks use mapped base-district values, but superseding local controls still require verification.' : 'Setback distances are conservative US defaults by intended use; verify with the local zoning ordinance.'}`
+    ? `Parcel-wide overlays are loaded for FEMA, NWI, slope, soils, stormwater, easements, EPA contamination, USFWS critical habitat, and perimeter setbacks. Floodway, wetlands, interpolated steep slope, polygon easements, and setbacks are unioned on one shared grid so spatial overlaps count once. NRCS soil shares and title-only easement flags are applied separately as non-spatial acreage adjustments. Contamination and critical habitat are hard gates (not land-use takeouts). ${overlays?.setback.value?.standardsSource === 'jurisdiction-code' ? 'Setbacks use mapped base-district values, but superseding local controls still require verification.' : 'Setback distances are conservative US defaults by intended use; verify with the local zoning ordinance.'}`
     : hasParcelBoundary
       ? 'A parcel boundary is loaded, but flood, wetland, slope, soils, and easement metrics still describe the selected point — not the entire parcel.'
       : 'This is a point screen; parcel boundaries, ownership, easements, and net buildable acreage are not loaded.')
@@ -961,7 +1029,7 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
     finalScore, rawScore, scoredWeight,
     ...getVerdict(rawScore, scoredWeight, gatedToManual, evidenceCoverage),
     confidence, confidenceLabel, confidencePenalty, regionalHazardModifier,
-    hardGates, gatedToManual, metrics,
+    hardGates, gatedToManual, metrics, nationalContext,
     strengths: strengths.length ? strengths : ['No major strength has been verified yet.'],
     redFlags: redFlags.length ? redFlags : ['No hard constraint was detected at the selected point by the available sources.'],
     unknowns,

@@ -12,7 +12,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "verify:providers": "node scripts/verify-provider-contracts.mjs"
+    "verify:providers": "node scripts/verify-provider-contracts.mjs",
+    "verify:architecture": "node scripts/verify-national-architecture.mjs",
+    "audit:parcel-facts": "node scripts/audit-parcel-fact-schemas.mjs"
   },
   "dependencies": {
     "leaflet": "^1.9.4",

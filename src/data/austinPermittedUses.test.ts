@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildAustinJurisdictionProfile } from './austinJurisdiction'
 import { AUSTIN_PROPOSED_USES, assessAustinProposedUse, getAustinProposedUseDefinition } from './austinPermittedUses'
-import type { AustinProposedUse } from '../types/site'
+import type { ProposedUseId } from '../types/site'
 
 function profile(zoningCode: string, baseDistrict: string, jurisdictionCode = 'FULL') {
   return buildAustinJurisdictionProfile({ zoningCode, baseDistrict, jurisdictionCode })
@@ -58,7 +58,7 @@ describe('Austin §25-2-491 proposed-use matrix', () => {
     expect(getAustinProposedUseDefinition('light_manufacturing')?.intendedUse).toBe('industrial')
   })
 
-  it.each<[AustinProposedUse, string, string]>([
+  it.each<[ProposedUseId, string, string]>([
     ['single_family', 'SF-3', 'permitted'],
     ['duplex', 'SF-3', 'permitted'],
     ['two_family', 'SF-3', 'permitted'],

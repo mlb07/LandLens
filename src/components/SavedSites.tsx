@@ -1,5 +1,8 @@
-import { ArrowLeft, BarChart3, FileText, FolderOpen, MapPin, Plus, Trash2 } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { ArrowLeft, BarChart3, Download, FileJson, FileText, FolderOpen, MapPin, Plus, Trash2, Upload } from 'lucide-react'
 import type { MetricResult, SavedSite, ScoreCategory } from '../types/site'
+import { parseBatchCsv, type BatchScreeningResult, type BatchScreeningRow } from '../data/batchScreening'
+import { sitesToCsv, sitesToGeoJson } from '../data/siteExports'
 
 const COMPARISON_COLUMNS: Array<{ category: ScoreCategory; short: string }> = [
   { category: 'zoning', short: 'Zoning' },
@@ -22,19 +25,62 @@ function parcelValue(site: SavedSite): string {
   return value ? `$${Math.round(value).toLocaleString()}` : '—'
 }
 
-export function SavedSites({ sites, onOpen, onReport, onDelete, onExplore }: {
+function downloadText(filename: string, content: string, type: string) {
+  const url = URL.createObjectURL(new Blob([content], { type }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+export function SavedSites({ sites, onOpen, onReport, onDelete, onExplore, onImportBatch }: {
   sites: SavedSite[]
   onOpen: (site: SavedSite) => void
   onReport: (site: SavedSite) => void
   onDelete: (id: string) => void
   onExplore: () => void
+  onImportBatch: (rows: BatchScreeningRow[], onProgress: (completed: number, total: number) => void) => Promise<BatchScreeningResult[]>
 }) {
+  const fileInput = useRef<HTMLInputElement>(null)
+  const [batchStatus, setBatchStatus] = useState('')
+  const [batchRunning, setBatchRunning] = useState(false)
+
+  async function importCsv(file?: File) {
+    if (!file) return
+    setBatchRunning(true)
+    setBatchStatus('Validating CSV…')
+    try {
+      const rows = parseBatchCsv(await file.text())
+      setBatchStatus(`Screening 0 of ${rows.length} sites…`)
+      const results = await onImportBatch(rows, (completed, total) => setBatchStatus(`Screening ${completed} of ${total} sites…`))
+      const failures = results.filter((result) => result.error)
+      setBatchStatus(failures.length
+        ? `${results.length - failures.length} sites saved; ${failures.length} failed: ${failures.map((result) => `row ${result.row.rowNumber} (${result.error})`).join('; ')}`
+        : `${results.length} sites screened and saved.`)
+    } catch (error) {
+      setBatchStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBatchRunning(false)
+      if (fileInput.current) fileInput.current.value = ''
+    }
+  }
+
   return (
     <main className="page-shell saved-page">
       <button className="text-button back-button" onClick={onExplore}><ArrowLeft size={16} /> Back to map</button>
       <div className="page-title-row">
         <div><div className="eyebrow"><BarChart3 size={14} /> Portfolio view</div><h1>Compare saved sites</h1><p>Use the same early-screening criteria to decide which sites deserve the next round of research.</p></div>
-        <button className="primary-button" onClick={onExplore}><Plus size={18} /> Evaluate another site</button>
+        <div className="saved-page-actions">
+          <input ref={fileInput} className="sr-only" type="file" accept=".csv,text/csv" onChange={(event) => void importCsv(event.target.files?.[0])} />
+          <button className="secondary-button" disabled={batchRunning} onClick={() => fileInput.current?.click()}><Upload size={17} /> {batchRunning ? 'Screening…' : 'Import batch CSV'}</button>
+          <button className="primary-button" onClick={onExplore}><Plus size={18} /> Evaluate another site</button>
+        </div>
+      </div>
+
+      <div className="batch-toolbar">
+        <p><strong>Batch schema:</strong> name, latitude, longitude; optional intended_use, location, acres, estimated_price, notes. Up to 100 U.S. sites per run.</p>
+        {batchStatus && <span role="status">{batchStatus}</span>}
       </div>
 
       {sites.length === 0 ? (
@@ -42,6 +88,10 @@ export function SavedSites({ sites, onOpen, onReport, onDelete, onExplore }: {
       ) : (
         <>
           <div className="table-caption"><strong>{sites.length} {sites.length === 1 ? 'site' : 'sites'}</strong><span>Your saved analyses appear here. Unscored categories show an em dash.</span></div>
+          <div className="portfolio-export-actions">
+            <button className="secondary-button" onClick={() => downloadText('landlens-sites.csv', sitesToCsv(sites), 'text/csv;charset=utf-8')}><Download size={16} /> Export CSV</button>
+            <button className="secondary-button" onClick={() => downloadText('landlens-sites.geojson', JSON.stringify(sitesToGeoJson(sites), null, 2), 'application/geo+json')}><FileJson size={16} /> Export GeoJSON</button>
+          </div>
           <div className="compare-table-wrap">
             <table className="compare-table">
               <thead><tr><th>Site</th>{COMPARISON_COLUMNS.map((col) => <th key={col.category}>{col.short}</th>)}<th>Score</th><th>Verdict</th><th><span className="sr-only">Actions</span></th></tr></thead>

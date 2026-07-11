@@ -26,10 +26,10 @@ const SPECIES_PROVENANCE: DataProvenance = {
 }
 
 const UTILITY_PROVENANCE: DataProvenance = {
-  source: 'EPA Public Water System Service Areas (SDWIS)',
-  sourceUrl: 'https://www.epa.gov/ground-water-and-drinking-water/safe-drinking-water-information-system-sdwis-federal-reporting',
-  vintage: 'Live EPA water service area service',
-  coverageNote: 'EPA explicitly states public water service area boundaries may differ from actual service areas and can contain modeling and attribution errors. A will-serve / capacity letter is required.',
+  source: 'EPA Public Water System Service Areas',
+  sourceUrl: 'https://www.epa.gov/ground-water-and-drinking-water/public-water-system-service-areas',
+  vintage: 'Version 3, March 2026; live EPA feature service',
+  coverageNote: 'EPA service areas combine utility/state-sourced and modeled boundaries. They are a first-step screen, not proof of a property connection, capacity, allocation, or extension cost. Local utility confirmation is required.',
 }
 
 const BPS_PROVENANCE: DataProvenance = {
@@ -298,44 +298,56 @@ export interface UtilityData {
   inWaterServiceArea: boolean
   pwsName: string
   pwsId: string
-  hasSewer: boolean
+  boundaryMethod: 'sourced' | 'modeled' | 'unknown'
+  dataProviderType: string
+  dataSourceUrl: string
+  populationServed?: number
+  serviceConnections?: number
 }
 
 export type UtilityObservation = OfficialObservation<UtilityData>
 
 export async function fetchUtilityService(coordinates: Coordinates, signal?: AbortSignal): Promise<UtilityObservation> {
   try {
-    // EPA SDWIS water service area ArcGIS REST service.
+    // EPA's current Version 3 community-water service-area feature service.
     const params = new URLSearchParams({
       f: 'json',
       geometry: `${coordinates.lng},${coordinates.lat}`,
       geometryType: 'esriGeometryPoint',
       inSR: '4326',
       spatialRel: 'esriSpatialRelIntersects',
-      outFields: 'PWS_ID,PWS_NAME,SERVICE_AREA_TYPE',
+      outFields: 'PWSID,PWS_Name,Data_Provider_Type,Data_Source,Model_Method,Population_Served_Count,Service_Connections_Count',
       returnGeometry: 'false',
       resultRecordCount: '5',
     })
     const data = await getJson<ArcGISFeatureSet>(
-      'https://geodata.epa.gov/arcgis/rest/services/Water/PWSA/MapServer/0/query?' + params,
+      'https://services.arcgis.com/cJ9YHowT8TU7DUyn/arcgis/rest/services/Water_System_Boundaries/FeatureServer/0/query?' + params,
       signal,
     )
     const features = data.features || []
     if (!features.length) {
       return {
         available: true,
-        value: { inWaterServiceArea: false, pwsName: '', pwsId: '', hasSewer: false },
+        value: { inWaterServiceArea: false, pwsName: '', pwsId: '', boundaryMethod: 'unknown', dataProviderType: '', dataSourceUrl: '' },
         provenance: UTILITY_PROVENANCE,
       }
     }
     const first = features[0].attributes
+    const providerType = String(first.Data_Provider_Type || '')
+    const modelMethod = String(first.Model_Method || '')
+    const populationServed = Number(first.Population_Served_Count)
+    const serviceConnections = Number(first.Service_Connections_Count)
     return {
       available: true,
       value: {
         inWaterServiceArea: true,
-        pwsName: String(first.PWS_NAME || ''),
-        pwsId: String(first.PWS_ID || ''),
-        hasSewer: /sewer/i.test(String(first.SERVICE_AREA_TYPE || '')),
+        pwsName: String(first.PWS_Name || ''),
+        pwsId: String(first.PWSID || ''),
+        boundaryMethod: /model/i.test(`${providerType} ${modelMethod}`) ? 'modeled' : providerType || first.Data_Source ? 'sourced' : 'unknown',
+        dataProviderType: providerType,
+        dataSourceUrl: String(first.Data_Source || ''),
+        populationServed: Number.isFinite(populationServed) ? populationServed : undefined,
+        serviceConnections: Number.isFinite(serviceConnections) ? serviceConnections : undefined,
       },
       provenance: UTILITY_PROVENANCE,
     }

@@ -1,6 +1,9 @@
 import type { Coordinates, DataProvenance, ParcelSelection, ScreeningArea } from '../types/site'
 import { externalRequest } from './externalRequest'
 import { getParcelFactFieldNames, normalizeParcelFacts, type ParcelFactsFieldMap } from './parcelFacts'
+import parcelFactMappingsJson from './parcelFactMappings.json'
+
+const PARCEL_FACT_MAPPINGS = parcelFactMappingsJson as Record<string, ParcelFactsFieldMap>
 
 interface GeoJsonFeature {
   type: 'Feature'
@@ -40,6 +43,7 @@ interface ParcelAdapter {
   provenance: DataProvenance
   timeoutMs?: number
   attempts?: number
+  factStatus: 'enriched' | 'audited-no-public-facts'
 }
 
 const APPROXIMATE_BOUNDARY_NOTE = 'Compiled tax/GIS parcel geometry is approximate, may be incomplete, and is not a boundary survey. Verify with the local assessor and a licensed surveyor.'
@@ -57,6 +61,12 @@ function adapter(
   provenance: DataProvenance,
   options: Pick<ParcelAdapter, 'bounds' | 'timeoutMs' | 'attempts'> = {},
 ): ParcelAdapter {
+  if (!fields.facts && !(id in PARCEL_FACT_MAPPINGS)) {
+    throw new Error(`Parcel adapter ${id} has not completed the public-fact schema audit.`)
+  }
+  const auditedFacts = PARCEL_FACT_MAPPINGS[id]
+  const facts = fields.facts ?? auditedFacts
+  const normalizedFields = { ...fields, facts }
   const outFields = Array.from(new Set([
     ...fields.ids,
     ...fields.names.flatMap((field) => Array.isArray(field) ? field : [field]),
@@ -64,9 +74,12 @@ function adapter(
     ...(fields.mappedAcres || []),
     ...(fields.squareFeet || []),
     ...(fields.vintage || []),
-    ...getParcelFactFieldNames(fields.facts),
+    ...getParcelFactFieldNames(facts),
   ])).join(',')
-  return { id, stateCode, queryUrl: `${serviceUrl}/query`, outFields, fields, provenance, ...options }
+  return {
+    id, stateCode, queryUrl: `${serviceUrl}/query`, outFields, fields: normalizedFields, provenance,
+    factStatus: facts && Object.keys(facts).length ? 'enriched' : 'audited-no-public-facts', ...options,
+  }
 }
 
 const parcelAdapters: ParcelAdapter[] = [
@@ -156,11 +169,33 @@ const parcelAdapters: ParcelAdapter[] = [
     { bounds: { south: 32.49, west: -97.61, north: 33.06, east: -97.0 } },
   ),
 
+  adapter(
+    'california-sonoma-county-parcels', 'CA',
+    'https://socogis.sonomacounty.ca.gov/map/rest/services/AGCOMMPublic/Sonoma_County_Parcels/FeatureServer/0',
+    { ids: ['APN', 'Asmt'], names: ['SitusFormatted1', 'SitusFormatted2'], assessorAcres: ['LandSizeAcres'], squareFeet: ['LandSizeSqft'], vintage: ['Value601RollYear', 'last_edited_date', 'MegabyteUpdated'] },
+    source('County of Sonoma Clerk-Recorder-Assessor parcels', 'https://socogis.sonomacounty.ca.gov/map/rest/services/AGCOMMPublic/Sonoma_County_Parcels/FeatureServer/0', 'Monthly County of Sonoma public parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 38.1124, west: -123.5330, north: 38.8528, east: -122.3502 }, timeoutMs: 12_000 },
+  ),
+  adapter(
+    'kansas-wyandotte-county-parcels', 'KS',
+    'https://gisweb.wycokck.org/arcgis/rest/services/UGMAPS/UGMAPS_4_V02_Parcels/MapServer/7',
+    { ids: ['STATE_ID', 'PARCEL', 'PARCEL_NBR'], names: [['NUMB', 'ADDR_EXT', 'DIR', 'ST_NAME', 'SUFX', 'CITY']], assessorAcres: ['ACRE'] },
+    source('Unified Government of Wyandotte County/Kansas City parcel polygons', 'https://gisweb.wycokck.org/arcgis/rest/services/UGMAPS/UGMAPS_4_V02_Parcels/MapServer/7', 'Live Unified Government public parcel service', PARTIAL_STATE_NOTE),
+    { bounds: { south: 38.9852, west: -94.9142, north: 39.2045, east: -94.5906 }, timeoutMs: 12_000 },
+  ),
+  adapter(
+    'mississippi-statewide-parcels-2023', 'MS',
+    'https://mgis19.mdeq.ms.gov/arcgis/rest/services/GeologyParcelAndFloodGIS/Parcels_Statewide_2023/FeatureServer/3',
+    { ids: ['PARNO', 'ALTPARNO', 'PPIN'], names: ['SITEADD', 'SUBNAME'], assessorAcres: ['TAXACRES', 'TOTAL_AC'], mappedAcres: ['GISACRES'], vintage: ['TAXYEAR', 'PLATDATE'] },
+    source('Mississippi DEQ / county tax assessor statewide parcels', 'https://mgis19.mdeq.ms.gov/arcgis/rest/services/GeologyParcelAndFloodGIS/Parcels_Statewide_2023/FeatureServer/3', '2023 statewide cadastral compilation', PARTIAL_STATE_NOTE),
+    { timeoutMs: 15_000, attempts: 1 },
+  ),
+
   // Arizona — Maricopa County (Phoenix metro). Arizona does not publish a
   // statewide parcel service; Maricopa County is the state's largest county
   // and covers the Phoenix metropolitan area.
   adapter('arizona-maricopa-county-parcels', 'AZ', 'https://gis.maricopa.gov/arcgis/rest/services/IndividualService/Parcel/MapServer/1',
-    { ids: ['APN', 'APNDash'], names: ['PropertyFullStreetAddress'] },
+    { ids: ['APN', 'APNDash'], names: ['PropertyFullStreetAddress'], assessorAcres: ['LotSize_Acre'], squareFeet: ['LotSize_SqFt'], vintage: ['TaxYear', 'ParcelValuationYear'] },
     source('Maricopa County Assessor parcel layer', 'https://gis.maricopa.gov/arcgis/rest/services/IndividualService/Parcel/MapServer/1', 'Live Maricopa County parcel service', PARTIAL_STATE_NOTE),
     { bounds: { south: 32.70, west: -113.80, north: 34.05, east: -111.15 } }),
 
@@ -250,9 +285,9 @@ const parcelAdapters: ParcelAdapter[] = [
   adapter('utah-statewide-parcels', 'UT', 'https://services1.arcgis.com/99lidPhWCzftIe9K/arcgis/rest/services/UtahStatewideParcels/FeatureServer/0',
     { ids: ['PARCEL_ID', 'ACCOUNT_NUM'], names: [['PARCEL_ADD', 'PARCEL_CITY']] },
     source('Utah AGRC Statewide Parcels', 'https://services1.arcgis.com/99lidPhWCzftIe9K/arcgis/rest/services/UtahStatewideParcels/FeatureServer/0', 'Live Utah county parcel compilation', PARTIAL_STATE_NOTE)),
-  adapter('virginia-vgin-parcels', 'VA', 'https://vginmaps.vdem.virginia.gov/arcgis/rest/services/VA_Base_Layers/VA_Parcels/FeatureServer',
+  adapter('virginia-vgin-parcels', 'VA', 'https://vginmaps.vdem.virginia.gov/arcgis/rest/services/VA_Base_Layers/VA_Parcels/FeatureServer/0',
     { ids: ['PARCELID', 'PTM_ID', 'VGIN_QPID'], names: ['LOCALITY'], vintage: ['LASTUPDATE'] },
-    source('Virginia Geographic Information Network (VGIN) statewide parcels', 'https://vginmaps.vdem.virginia.gov/arcgis/rest/services/VA_Base_Layers/VA_Parcels/FeatureServer', 'Live VGIN statewide parcel service', PARTIAL_STATE_NOTE), { timeoutMs: 12_000 }),
+    source('Virginia Geographic Information Network (VGIN) statewide parcels', 'https://vginmaps.vdem.virginia.gov/arcgis/rest/services/VA_Base_Layers/VA_Parcels/FeatureServer/0', 'Live VGIN statewide parcel service', PARTIAL_STATE_NOTE), { timeoutMs: 12_000 }),
   adapter('vermont-standardized-parcels', 'VT', 'https://services1.arcgis.com/BkFxaEFNwHqX3tAw/arcgis/rest/services/FS_VCGI_OPENDATA_Cadastral_VTPARCELS_poly_standardized_parcels_SP_v1/FeatureServer/0',
     { ids: ['SPAN', 'PARCID', 'MAPID'], names: ['E911ADDR', 'LOCAPROP'], assessorAcres: ['ACRESGL'], vintage: ['YEAR', 'SOURCEDATE', 'EDITDATE'] },
     source('Vermont VCGI Standardized Parcel Data', 'https://services1.arcgis.com/BkFxaEFNwHqX3tAw/arcgis/rest/services/FS_VCGI_OPENDATA_Cadastral_VTPARCELS_poly_standardized_parcels_SP_v1/FeatureServer/0', 'Live statewide Vermont standardized parcels', PARTIAL_STATE_NOTE)),
@@ -270,7 +305,7 @@ const parcelAdapters: ParcelAdapter[] = [
 
   // Alabama — Mobile County (Mobile County Revenue Commission)
   adapter('alabama-mobile-county-parcels', 'AL', 'https://services8.arcgis.com/HND1NcQt6vgOGn1z/arcgis/rest/services/MCRC_Public_Parcels/FeatureServer/0',
-    { ids: ['Parcel_Number', 'Account_Number', 'ParcelNo'], names: ['PropAddr1', 'PropCity'] },
+    { ids: ['Parcel_Number', 'Account_Number', 'ParcelNo'], names: ['PropAddr1', 'PropCity'], assessorAcres: ['Acreage'], squareFeet: ['Sqft'] },
     source('Mobile County Revenue Commission public parcels', 'https://services8.arcgis.com/HND1NcQt6vgOGn1z/arcgis/rest/services/MCRC_Public_Parcels/FeatureServer/0', 'Live Mobile County parcel service', PARTIAL_STATE_NOTE),
     { bounds: { south: 30.22, west: -88.42, north: 31.52, east: -87.42 } }),
 
@@ -305,12 +340,12 @@ const parcelAdapters: ParcelAdapter[] = [
 
   // Maryland — statewide parcel boundaries (Maryland iMap / Dept of Planning)
   adapter('maryland-statewide-parcel-boundaries', 'MD', 'https://mdgeodata.md.gov/imap/rest/services/PlanningCadastre/MD_ParcelBoundaries/MapServer/0',
-    { ids: ['ACCTID', 'JURSCODE'], names: [] },
+    { ids: ['ACCTID', 'JURSCODE'], names: ['ADDRESS'], assessorAcres: ['ACRES'], mappedAcres: ['POLYACRES'], squareFeet: ['LANDAREA'], vintage: ['SDATDATE'] },
     source('Maryland iMap statewide parcel boundaries', 'https://mdgeodata.md.gov/imap/rest/services/PlanningCadastre/MD_ParcelBoundaries/MapServer/0', 'Live statewide Maryland parcel boundary service', PARTIAL_STATE_NOTE), { timeoutMs: 12_000 }),
 
   // Michigan — Ottawa County
   adapter('michigan-ottawa-county-parcels', 'MI', 'https://gis.miottawa.org/arcgis/rest/services/HostedServices/ParcelsPublic/MapServer/0',
-    { ids: ['FinalPIN', 'ParentPIN', 'CondoPIN'], names: [['AddressNumber', 'AddressStreet']] },
+    { ids: ['FinalPIN', 'ParentPIN', 'CondoPIN'], names: ['PropertyAddress', ['AddressNumber', 'AddressStreet']], assessorAcres: ['Acreage'] },
     source('Ottawa County Michigan public parcels', 'https://gis.miottawa.org/arcgis/rest/services/HostedServices/ParcelsPublic/MapServer/0', 'Live Ottawa County parcel service', PARTIAL_STATE_NOTE),
     { bounds: { south: 42.70, west: -86.50, north: 43.35, east: -85.90 } }),
 
@@ -322,7 +357,7 @@ const parcelAdapters: ParcelAdapter[] = [
 
   // New Mexico — Doña Ana County (Las Cruces area)
   adapter('new-mexico-dona-ana-county-parcels', 'NM', 'https://services7.arcgis.com/JMIoqakAkedEx0oU/arcgis/rest/services/DAC_Parcels/FeatureServer/0',
-    { ids: ['ACCOUNTNUMBER', 'PARCELNUMBER', 'MAP_CODE'], names: [], mappedAcres: [] },
+    { ids: ['ACCOUNTNUMBER', 'PARCELNUMBER', 'MAP_CODE'], names: ['SITUSADDRS', 'SUBNAME'], assessorAcres: ['TOTALACRES'], squareFeet: ['TOTALSQFT'] },
     source('Doña Ana County Assessor public parcels', 'https://services7.arcgis.com/JMIoqakAkedEx0oU/arcgis/rest/services/DAC_Parcels/FeatureServer/0', 'Live Doña Ana County parcel service', PARTIAL_STATE_NOTE),
     { bounds: { south: 31.30, west: -107.10, north: 32.45, east: -106.30 } }),
 
@@ -334,7 +369,7 @@ const parcelAdapters: ParcelAdapter[] = [
 
   // Oregon — statewide taxlots (Oregon Department of Forestry)
   adapter('oregon-statewide-taxlots', 'OR', 'https://gis.odf.oregon.gov/ags1/rest/services/WebMercator/TaxlotsDisplay/MapServer/0',
-    { ids: ['County', 'Town', 'Range'], names: ['TownPart'] },
+    { ids: ['County', 'Town', 'Range'], names: ['TownPart'], assessorAcres: ['TaxlotAcre'], vintage: ['INSTYEAR'] },
     source('Oregon Department of Forestry statewide taxlot display', 'https://gis.odf.oregon.gov/ags1/rest/services/WebMercator/TaxlotsDisplay/MapServer/0', 'Live statewide Oregon taxlot service', PARTIAL_STATE_NOTE), { timeoutMs: 12_000 }),
 
   // Pennsylvania — Chester County
@@ -345,7 +380,7 @@ const parcelAdapters: ParcelAdapter[] = [
 
   // Pennsylvania — York County
   adapter('pennsylvania-york-county-parcels', 'PA', 'https://arcweb1.ycpc.org/server/rest/services/OPEN_DATA/Parcels/MapServer/0',
-    { ids: ['PIDN', 'PARCEL', 'PARCEL_MAJOR', 'PARCEL_MINOR'], names: ['DISTRICT', 'BLOCK'] },
+    { ids: ['PIDN', 'PARCEL', 'PARCEL_MAJOR', 'PARCEL_MINOR'], names: ['PROPADR', 'DISTRICT', 'BLOCK'], assessorAcres: ['ACRES'] },
     source('York County Pennsylvania Planning Commission parcels', 'https://arcweb1.ycpc.org/server/rest/services/OPEN_DATA/Parcels/MapServer/0', 'Live York County parcel service', PARTIAL_STATE_NOTE),
     { bounds: { south: 39.70, west: -77.30, north: 40.20, east: -76.50 } }),
 
@@ -356,13 +391,13 @@ const parcelAdapters: ParcelAdapter[] = [
 
   // South Carolina — York County
   adapter('south-carolina-york-county-parcels', 'SC', 'https://services1.arcgis.com/2AGLxyiJoNiVHKwq/arcgis/rest/services/Parcels/FeatureServer/0',
-    { ids: ['TAXMAPID', 'ParcelID', 'AprAccNum'], names: [] },
+    { ids: ['TAXMAPID', 'ParcelID', 'AprAccNum'], names: ['PropertyAddress', 'LegalDescription'], assessorAcres: ['deededacres'] },
     source('York County South Carolina public parcels', 'https://services1.arcgis.com/2AGLxyiJoNiVHKwq/arcgis/rest/services/Parcels/FeatureServer/0', 'Live York County SC parcel service', PARTIAL_STATE_NOTE),
     { bounds: { south: 34.80, west: -81.65, north: 35.20, east: -80.80 } }),
 
   // South Dakota — Minnehaha County (Sioux Falls area)
   adapter('south-dakota-minnehaha-county-parcels', 'SD', 'https://gis.minnehahacounty.gov/minnemap/rest/services/Parcels/MapServer/0',
-    { ids: ['TAG', 'MAP_ID', 'MRRDID'], names: ['FULL_ADDRESS'] },
+    { ids: ['TAG', 'MAP_ID', 'MRRDID'], names: ['FULL_ADDRESS'], assessorAcres: ['TOTAL_ACREAGE'], squareFeet: ['SQFT'], vintage: ['Assmnt_Year'] },
     source('Minnehaha County South Dakota parcel service', 'https://gis.minnehahacounty.gov/minnemap/rest/services/Parcels/MapServer/0', 'Live Minnehaha County parcel service', PARTIAL_STATE_NOTE),
     { bounds: { south: 43.20, west: -96.90, north: 43.90, east: -96.30 } }),
 
@@ -537,8 +572,11 @@ export function getParcelProviderContracts() {
     id: candidate.id,
     stateCode: candidate.stateCode,
     queryUrl: candidate.queryUrl,
+    bounds: candidate.bounds ? { ...candidate.bounds } : undefined,
+    source: candidate.provenance.source,
     outFields: candidate.outFields.split(',').filter(Boolean),
     factFields: getParcelFactFieldNames(candidate.fields.facts),
+    factStatus: candidate.factStatus,
   }))
 }
 

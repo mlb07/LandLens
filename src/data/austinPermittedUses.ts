@@ -1,30 +1,16 @@
-import type { AustinProposedUse, IntendedUse, JurisdictionProfile } from '../types/site'
+import type { JurisdictionProfile, ProposedUseAssessment, ProposedUseDefinition, ProposedUseId, ProposedUseStatus } from '../types/site'
 import { normalizeAustinBaseDistrict } from './austinJurisdiction'
 
 export const AUSTIN_PERMITTED_USES_SOURCE_URL = 'https://library.municode.com/tx/austin/codes/code_of_ordinances?nodeId=TIT25LADE_CH25-2ZO_SUBCHAPTER_CUSDERE_ART2PRUSDERE_DIV1RETA_S25-2-491PECOPRUS'
 
-export type AustinUseTableStatus = 'permitted' | 'conditional' | 'prohibited' | 'special-review' | 'unresolved'
+export type AustinUseTableStatus = ProposedUseStatus
 export type AustinUseGroup = 'Residential' | 'Commercial' | 'Industrial' | 'Agricultural & civic'
 
-export interface AustinProposedUseDefinition {
-  key: AustinProposedUse
-  label: string
-  codeLabel: string
+export interface AustinProposedUseDefinition extends ProposedUseDefinition {
   group: AustinUseGroup
-  intendedUse: IntendedUse
 }
 
-export interface AustinUseAssessment {
-  proposedUse: AustinProposedUse
-  useLabel: string
-  district: string
-  status: AustinUseTableStatus
-  rawCell?: string
-  sourceSection: string
-  requiresCombiningDistrictReview: boolean
-  requiresOverlayReview: boolean
-  explanation: string
-}
+export type AustinUseAssessment = ProposedUseAssessment
 
 const DISTRICTS = ['LA', 'RR', 'SF-1', 'SF-2', 'SF-3', 'SF-4A', 'SF-4B', 'SF-5', 'SF-6', 'MF-1', 'MF-2', 'MF-3', 'MF-4', 'MF-5', 'MF-6', 'MH', 'NO', 'LO', 'GO', 'CR', 'LR', 'GR', 'L', 'CBD', 'DMU', 'W/LO', 'CS', 'CS-1', 'CH', 'IP', 'MI', 'LI', 'R&D', 'DR', 'AV', 'AG', 'PUD', 'P'] as const
 
@@ -76,8 +62,8 @@ export const AUSTIN_PROPOSED_USES: AustinProposedUseDefinition[] = MATRIX_DEFINI
   intendedUse: definition.intendedUse,
 }))
 
-function parseMatrix(): Map<AustinProposedUse, Map<string, string>> {
-  const matrix = new Map<AustinProposedUse, Map<string, string>>()
+function parseMatrix(): Map<ProposedUseId, Map<string, string>> {
+  const matrix = new Map<ProposedUseId, Map<string, string>>()
   for (const definition of MATRIX_DEFINITIONS) {
     const cells = definition.cells.split(/\s+/)
     if (cells.length !== DISTRICTS.length) throw new Error(`Austin use matrix row ${definition.key} has ${cells.length} cells; expected ${DISTRICTS.length}.`)
@@ -96,11 +82,11 @@ function cellStatus(cell?: string): AustinUseTableStatus {
   return 'special-review'
 }
 
-export function getAustinProposedUseDefinition(key?: AustinProposedUse): AustinProposedUseDefinition | undefined {
+export function getAustinProposedUseDefinition(key?: ProposedUseId): AustinProposedUseDefinition | undefined {
   return AUSTIN_PROPOSED_USES.find((definition) => definition.key === key)
 }
 
-export function assessAustinProposedUse(profile: JurisdictionProfile, proposedUse?: AustinProposedUse): AustinUseAssessment | undefined {
+export function assessAustinProposedUse(profile: JurisdictionProfile, proposedUse?: ProposedUseId): AustinUseAssessment | undefined {
   if (!proposedUse) return undefined
   const definition = getAustinProposedUseDefinition(proposedUse)
   if (!definition) return undefined
@@ -122,6 +108,7 @@ export function assessAustinProposedUse(profile: JurisdictionProfile, proposedUs
     useLabel: definition.codeLabel,
     district,
     status,
+    statusLabel: austinUseStatusLabel(status),
     rawCell,
     sourceSection: 'Austin LDC §25-2-491',
     requiresCombiningDistrictReview: combiningDistrictMayModify,

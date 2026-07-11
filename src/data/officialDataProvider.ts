@@ -1,8 +1,10 @@
-import type { Coordinates, DataProvenance } from '../types/site'
+import type { Coordinates, DataProvenance, JurisdictionAuthority } from '../types/site'
 import { fetchBps, fetchContamination, fetchSoils, fetchSpecies, fetchUtilityService, type BpsObservation, type ContaminationObservation, type SoilsObservation, type SpeciesObservation, type UtilityObservation } from './nationalAdapters'
 import { fetchEasements, fetchUtilityCapacity, fetchZoningAtlas, type EasementsObservation, type UtilityCapacityObservation, type ZoningObservation } from './localAdapters'
 import { fetchStormwater, type StormwaterObservation } from './stormwaterProvider'
 import { externalRequest } from './externalRequest'
+import { CENSUS_AUTHORITY_PROVENANCE, fetchJurisdictionAuthority } from './jurisdictions/authorityProvider'
+import { fetchBroadband, fetchProtectedLands, fetchSewerService, fetchTransportation, type BroadbandObservation, type ProtectedLandsObservation, type SewerObservation, type TransportationObservation } from './nationalContextProvider'
 
 export interface OfficialObservation<T> {
   available: boolean
@@ -45,15 +47,22 @@ export interface OfficialSiteData {
   contamination: ContaminationObservation
   species: SpeciesObservation
   utilityService: UtilityObservation
+  sewerService: SewerObservation
+  broadband: BroadbandObservation
+  protectedLands: ProtectedLandsObservation
+  transportation: TransportationObservation
   bps: BpsObservation
   stormwater: StormwaterObservation
   easements: EasementsObservation
   zoning?: ZoningObservation
   localUtility?: UtilityCapacityObservation
+  authority: OfficialObservation<JurisdictionAuthority>
   fetchedAt: string
 }
 
-export type OfficialCategory = 'flood' | 'slope' | 'road' | 'demographics' | 'environmental' | 'soils' | 'contamination' | 'species' | 'utilityService' | 'bps' | 'stormwater' | 'easements' | 'zoning' | 'localUtility'
+export type OfficialCategory = 'flood' | 'slope' | 'road' | 'demographics' | 'environmental' | 'soils' | 'contamination' | 'species' | 'utilityService' | 'sewerService' | 'broadband' | 'protectedLands' | 'transportation' | 'bps' | 'stormwater' | 'easements' | 'zoning' | 'localUtility' | 'authority'
+
+export const OFFICIAL_SOURCE_COUNT = 19
 
 export interface OfficialSiteProgress {
   data: OfficialSiteData
@@ -325,14 +334,19 @@ export async function fetchOfficialSiteData(coordinates: Coordinates, signal?: A
     contamination: { available: false, provenance: { source: 'EPA FRS', sourceUrl: '' }, error: 'Source check is still in progress' },
     species: { available: false, provenance: { source: 'USFWS ECOS', sourceUrl: '' }, error: 'Source check is still in progress' },
     utilityService: { available: false, provenance: { source: 'EPA SDWIS', sourceUrl: '' }, error: 'Source check is still in progress' },
+    sewerService: { available: false, provenance: { source: 'EPA Sewersheds', sourceUrl: '' }, error: 'Source check is still in progress' },
+    broadband: { available: false, provenance: { source: 'FCC National Broadband Map', sourceUrl: '' }, error: 'Source check is still in progress' },
+    protectedLands: { available: false, provenance: { source: 'USGS PAD-US', sourceUrl: '' }, error: 'Source check is still in progress' },
+    transportation: { available: false, provenance: { source: 'USDOT BTS NTAD', sourceUrl: '' }, error: 'Source check is still in progress' },
     bps: { available: false, provenance: { source: 'Census BPS', sourceUrl: '' }, error: 'Source check is still in progress' },
     stormwater: { available: false, provenance: { source: 'USGS 3DEP drainage', sourceUrl: '' }, error: 'Source check is still in progress' },
     easements: { available: false, provenance: { source: 'Local GIS', sourceUrl: '' }, error: 'Source check is still in progress' },
     zoning: { available: false, provenance: { source: 'Local zoning atlas', sourceUrl: '' }, error: 'Source check is still in progress' },
     localUtility: { available: false, provenance: { source: 'Local utility service area', sourceUrl: '' }, error: 'Source check is still in progress' },
+    authority: pending(CENSUS_AUTHORITY_PROVENANCE),
     fetchedAt: new Date().toISOString(),
   }
-  const remaining = new Set<OfficialCategory>(['flood', 'slope', 'road', 'demographics', 'environmental', 'soils', 'contamination', 'species', 'utilityService', 'bps', 'stormwater', 'easements', 'zoning', 'localUtility'])
+  const remaining = new Set<OfficialCategory>(['flood', 'slope', 'road', 'demographics', 'environmental', 'soils', 'contamination', 'species', 'utilityService', 'sewerService', 'broadband', 'protectedLands', 'transportation', 'bps', 'stormwater', 'easements', 'zoning', 'localUtility', 'authority'])
   const publish = <K extends OfficialCategory>(category: K, observation: OfficialSiteData[K]) => {
     data = { ...data, [category]: observation, fetchedAt: new Date().toISOString() }
     remaining.delete(category)
@@ -349,11 +363,16 @@ export async function fetchOfficialSiteData(coordinates: Coordinates, signal?: A
     fetchContamination(coordinates, signal).then((value) => publish('contamination', value)),
     fetchSpecies(coordinates, signal).then((value) => publish('species', value)),
     fetchUtilityService(coordinates, signal).then((value) => publish('utilityService', value)),
+    fetchSewerService(coordinates, signal).then((value) => publish('sewerService', value)),
+    fetchBroadband(coordinates).then((value) => publish('broadband', value)),
+    fetchProtectedLands(coordinates, signal).then((value) => publish('protectedLands', value)),
+    fetchTransportation(coordinates, signal).then((value) => publish('transportation', value)),
     fetchBps(coordinates, signal).then((value) => publish('bps', value)),
     fetchStormwater(coordinates, signal).then((value) => publish('stormwater', value)),
     fetchEasements(coordinates, stateCode || 'XX', signal).then((value) => publish('easements', value)),
     fetchZoningAtlas(coordinates, stateCode || 'XX', signal).then((value) => publish('zoning', value)),
     fetchUtilityCapacity(coordinates, stateCode || 'XX', signal).then((value) => publish('localUtility', value)),
+    fetchJurisdictionAuthority(coordinates, stateCode || 'XX', signal).then((value) => publish('authority', value)),
   ])
   officialDataCache.set(cacheKey, { data, expiresAt: Date.now() + 10 * 60_000 })
   return data

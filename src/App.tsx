@@ -5,16 +5,18 @@ const SavedSites = lazy(() => import('./components/SavedSites').then(m => ({ def
 import { ScorePanel } from './components/ScorePanel'
 import { SiteForm } from './components/SiteForm'
 const SiteReport = lazy(() => import('./components/SiteReport').then(m => ({ default: m.SiteReport })))
-import { fetchOfficialSiteData, type OfficialSiteData } from './data/officialDataProvider'
+import { fetchOfficialSiteData, OFFICIAL_SOURCE_COUNT, type OfficialSiteData } from './data/officialDataProvider'
 import { fetchParcelAt, formatParcelAcres } from './data/parcelProvider'
-import { fetchParcelOverlays, recomputeSetbackAndNetDevelopable, type ParcelOverlayData, type SetbackStandardsInput } from './data/parcelOverlayProvider'
+import { fetchParcelOverlays, recomputeSetbackAndNetDevelopable, type ParcelOverlayData } from './data/parcelOverlayProvider'
+import { jurisdictionSetbackStandards } from './data/jurisdictions/setbackStandards'
 import { fetchRegionalHazards, type RegionalHazardData } from './data/regionalHazardProvider'
 import { registerDefaultLocalAdapters } from './data/localAdapters'
-import { AUSTIN_STANDARDS_SOURCE_URL } from './data/austinJurisdiction'
 import { getStateDefinition, stateDefinitions } from './data/states'
+import { getCoverageTelemetry } from './data/coverageProvider'
+import { screenBatch, type BatchScreeningResult, type BatchScreeningRow } from './data/batchScreening'
 import { analyzeSite } from './lib/scoring'
 import { loadSites, saveSites } from './lib/storage'
-import { EMPTY_SITE_INPUTS, type Coordinates, type JurisdictionProfile, type ParcelSelection, type ParcelSnapshot, type SavedSite, type SiteAnalysis, type SiteInputs } from './types/site'
+import { EMPTY_SITE_INPUTS, type BuildableEnvelopeSnapshot, type Coordinates, type ParcelSelection, type ParcelSnapshot, type SavedSite, type SiteAnalysis, type SiteInputs } from './types/site'
 import './App.css'
 
 type View = 'explorer' | 'saved' | 'report'
@@ -33,6 +35,12 @@ function snapshotParcel(parcel?: ParcelSelection): ParcelSnapshot | undefined {
   return { id: parcel.id, acres: parcel.acres, acreageKind: parcel.acreageKind, facts: parcel.facts, provenance: parcel.provenance }
 }
 
+function snapshotBuildableEnvelope(overlays?: ParcelOverlayData | null): BuildableEnvelopeSnapshot | undefined {
+  const envelope = overlays?.buildableEnvelope.value
+  if (!overlays?.buildableEnvelope.available || !envelope) return undefined
+  return { ...envelope, provenance: overlays.buildableEnvelope.provenance }
+}
+
 function restoreParcel(site: SavedSite): ParcelSelection | undefined {
   if (!site.parcel) return undefined
   return {
@@ -40,21 +48,6 @@ function restoreParcel(site: SavedSite): ParcelSelection | undefined {
     id: site.parcel.id, acres: site.parcel.acres, acreageKind: site.parcel.acreageKind,
     facts: site.parcel.facts, provenance: site.parcel.provenance,
     boundary: site.screeningArea?.kind === 'parcel' ? site.screeningArea.boundary : undefined,
-  }
-}
-
-function jurisdictionSetbackStandards(profile?: JurisdictionProfile): SetbackStandardsInput | undefined {
-  const standards = profile?.standards
-  if (!profile?.standardsApply || !standards?.frontSetbackFeet || !standards.interiorSideSetbackFeet || !standards.rearSetbackFeet) return undefined
-  return {
-    frontFeet: standards.frontSetbackFeet,
-    sideFeet: standards.interiorSideSetbackFeet,
-    rearFeet: standards.rearSetbackFeet,
-    district: standards.district,
-    authority: profile.authorityName,
-    sourceUrl: AUSTIN_STANDARDS_SOURCE_URL,
-    sourceSection: standards.sourceSection,
-    notes: standards.notes,
   }
 }
 
@@ -70,7 +63,7 @@ function App() {
   const [overlaysLoading, setOverlaysLoading] = useState(false)
   const [hazards, setHazards] = useState<RegionalHazardData | null>(null)
   const [analysisLoading, setAnalysisLoading] = useState(true)
-  const [sourcesPending, setSourcesPending] = useState(14)
+  const [sourcesPending, setSourcesPending] = useState(OFFICIAL_SOURCE_COUNT)
   const [parcel, setParcel] = useState<ParcelSelection>()
   const [parcelLoading, setParcelLoading] = useState(true)
   const [sites, setSites] = useState<SavedSite[]>(loadSites)
@@ -201,8 +194,8 @@ function App() {
   const jurisdictionProfile = officialData?.zoning?.value?.profile
 
   // Recompute setbacks and net developable acreage when the intended use or
-  // local zoning profile changes. Recognized Austin base districts replace
-  // generic defaults only inside the City's mapped regulatory jurisdiction.
+  // local zoning profile changes. Registered jurisdiction standards replace
+  // generic defaults only when the local pack marks them as applicable.
   useEffect(() => {
     if (!parcelBoundary || !overlaysRef.current) return
     const updated = recomputeSetbackAndNetDevelopable(
@@ -264,7 +257,7 @@ function App() {
     setOverlaysLoading(false)
     setParcelLoading(true)
     setAnalysisLoading(true)
-    setSourcesPending(14)
+    setSourcesPending(OFFICIAL_SOURCE_COUNT)
     setAnalysis(analyzeSite(next, nextInputs))
     setCurrentId(null)
     setDirty(false)
@@ -309,7 +302,7 @@ function App() {
     setOverlaysLoading(false)
     setParcelLoading(true)
     setAnalysisLoading(true)
-    setSourcesPending(14)
+    setSourcesPending(OFFICIAL_SOURCE_COUNT)
     setAnalysis(analyzeSite(state.center, nextInputs))
     setCurrentId(null)
     setDirty(false)
@@ -334,11 +327,13 @@ function App() {
     const now = new Date().toISOString()
     const parcelSnapshot = snapshotParcel(parcel) ?? existingSite?.parcel
     const jurisdiction = jurisdictionProfile ?? existingSite?.jurisdiction
+    const authority = officialData?.authority.available ? officialData.authority.value : existingSite?.authority
+    const buildableEnvelope = snapshotBuildableEnvelope(overlays) ?? existingSite?.buildableEnvelope
     if (currentId) {
-      const next = sites.map((site) => site.id === currentId ? { ...site, stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, parcel: parcelSnapshot, jurisdiction, updatedAt: now } : site)
+      const next = sites.map((site) => site.id === currentId ? { ...site, stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, parcel: parcelSnapshot, authority, jurisdiction, buildableEnvelope, updatedAt: now } : site)
       persistSites(next)
     } else {
-      const saved: SavedSite = { id: crypto.randomUUID(), stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, parcel: parcelSnapshot, jurisdiction, createdAt: now, updatedAt: now }
+      const saved: SavedSite = { id: crypto.randomUUID(), stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, parcel: parcelSnapshot, authority, jurisdiction, buildableEnvelope, createdAt: now, updatedAt: now }
       persistSites([saved, ...sites])
       setCurrentId(saved.id)
     }
@@ -366,7 +361,7 @@ function App() {
     setOverlaysLoading(false)
     setParcelLoading(true)
     setAnalysisLoading(true)
-    setSourcesPending(14)
+    setSourcesPending(OFFICIAL_SOURCE_COUNT)
     setAnalysis(site.analysis)
     setCurrentId(site.id)
     setDirty(false)
@@ -391,7 +386,9 @@ function App() {
         ? { kind: 'parcel', provider: parcel.provenance?.source, boundary: parcel.boundary }
         : existingSite?.screeningArea ?? { kind: 'point' },
       parcel: parcelSnapshot,
+      authority: officialData?.authority.available ? officialData.authority.value : existingSite?.authority,
       jurisdiction: jurisdictionProfile ?? existingSite?.jurisdiction,
+      buildableEnvelope: snapshotBuildableEnvelope(overlays) ?? existingSite?.buildableEnvelope,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     }
     showReport(site, 'explorer')
@@ -405,12 +402,20 @@ function App() {
     notify('Site deleted')
   }
 
+  async function importBatch(rows: BatchScreeningRow[], onProgress: (completed: number, total: number) => void): Promise<BatchScreeningResult[]> {
+    const results = await screenBatch(rows, (completed, total) => onProgress(completed, total))
+    const imported = results.flatMap((result) => result.site ? [result.site] : [])
+    if (imported.length) persistSites([...imported, ...sites])
+    notify(`${imported.length} batch site${imported.length === 1 ? '' : 's'} saved${results.length > imported.length ? ` · ${results.length - imported.length} failed` : ''}`)
+    return results
+  }
+
   function navigate(next: View) {
     setView(next)
     setMobileMenu(false)
   }
 
-  if (view === 'saved') return <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}><Suspense fallback={<div className="lazy-loading">Loading…</div>}><SavedSites sites={sites} onOpen={openSite} onReport={showReport} onDelete={deleteSite} onExplore={() => navigate('explorer')} /></Suspense>{toast && <Toast message={toast} />}</AppFrame>
+  if (view === 'saved') return <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}><Suspense fallback={<div className="lazy-loading">Loading…</div>}><SavedSites sites={sites} onOpen={openSite} onReport={showReport} onDelete={deleteSite} onExplore={() => navigate('explorer')} onImportBatch={importBatch} /></Suspense>{toast && <Toast message={toast} />}</AppFrame>
   if (view === 'report' && reportSite) return <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}><Suspense fallback={<div className="lazy-loading">Loading…</div>}><SiteReport site={reportSite} onBack={() => navigate(reportReturnView)} /></Suspense></AppFrame>
 
   return (
@@ -433,7 +438,7 @@ function App() {
             <button className={panelTab === 'details' ? 'active' : ''} onClick={() => setPanelTab('details')}><span>2</span> Site inputs</button>
           </div>
           <div className="panel-scroll" ref={panelScrollRef} tabIndex={0} aria-label={panelTab === 'details' ? 'Site inputs' : 'Site analysis'}>
-            {panelTab === 'details' ? <SiteForm inputs={inputs} parcel={parcel} jurisdiction={jurisdictionProfile} onChange={updateInputs} onAnalyze={runAnalysis} dirty={dirty} /> : <ScorePanel analysis={analysis} dirty={dirty} loading={analysisLoading} pendingSources={sourcesPending} fetchedAt={officialData?.fetchedAt} parcelOverlaysLoading={overlaysLoading} hazards={hazards} />}
+            {panelTab === 'details' ? <SiteForm inputs={inputs} parcel={parcel} jurisdiction={jurisdictionProfile} authority={officialData?.authority.value} coverage={getCoverageTelemetry(coordinates, activeStateCode)} nationalContext={analysis.nationalContext} onChange={updateInputs} onAnalyze={runAnalysis} dirty={dirty} /> : <ScorePanel analysis={analysis} dirty={dirty} loading={analysisLoading} pendingSources={sourcesPending} fetchedAt={officialData?.fetchedAt} parcelOverlaysLoading={overlaysLoading} hazards={hazards} />}
           </div>
           <div className="panel-actions">
             <button className="secondary-button" onClick={reportCurrent}><FileText size={17} /> Report</button>

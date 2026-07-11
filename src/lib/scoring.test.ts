@@ -6,6 +6,9 @@ import type { ParcelOverlayData } from '../data/parcelOverlayProvider'
 import type { RegionalHazardData } from '../data/regionalHazardProvider'
 import type { ParcelSelection } from '../types/site'
 import { buildAustinJurisdictionProfile } from '../data/austinJurisdiction'
+import { registerDefaultJurisdictionPacks } from '../data/jurisdictions/defaultPacks'
+
+registerDefaultJurisdictionPacks()
 
 const COORDS = { lat: 30.27, lng: -97.74 }
 const GOOD_INPUTS = { ...EMPTY_SITE_INPUTS, acres: '10', roadFrontage: 'yes' as const, utilitiesNearby: 'yes' as const, zoningNotes: 'by-right permitted', location: 'Austin, TX' }
@@ -19,10 +22,15 @@ const fullOfficial: OfficialSiteData = {
   soils: { available: true, value: { mukey: '123', mapUnitName: 'Sandy loam', drainageClass: 'Well drained', hydricClass: 'No', dominantRating: 'slight' as const, septicRating: 'Slight', dwellingRating: 'Slight', hydric: false }, provenance: { source: 'NRCS', sourceUrl: 'x' } },
   contamination: { available: true, value: { facilityCount: 0, nearestDistanceMeters: 0, hasMajorFlag: false, facilityTypes: [], nearestName: '' }, provenance: { source: 'EPA', sourceUrl: 'x' } },
   species: { available: true, value: { criticalHabitatHit: false, criticalHabitatLayers: [], speciesCount: 0 }, provenance: { source: 'USFWS', sourceUrl: 'x' } },
-  utilityService: { available: true, value: { inWaterServiceArea: true, pwsName: 'City Water', pwsId: '12345', hasSewer: true }, provenance: { source: 'EPA', sourceUrl: 'x' } },
+  utilityService: { available: true, value: { inWaterServiceArea: true, pwsName: 'City Water', pwsId: '12345', boundaryMethod: 'sourced', dataProviderType: 'Utility', dataSourceUrl: 'x', populationServed: 100000, serviceConnections: 40000 }, provenance: { source: 'EPA', sourceUrl: 'x' } },
+  sewerService: { available: true, value: { inMappedSewershed: true, facilityName: 'Central WWTP', cwnsId: '1', npdesId: 'TX1', method: 'sourced', source: 'Utility', echoUrl: 'x' }, provenance: { source: 'EPA', sourceUrl: 'x' } },
+  broadband: { available: true, value: { lookupUrl: 'https://broadbandmap.fcc.gov/', embeddedAvailability: false, dataAccess: 'public-map' }, provenance: { source: 'FCC', sourceUrl: 'x' } },
+  protectedLands: { available: true, value: { intersects: false, interests: [], hasFeeInterest: false, hasEasementOrDesignation: false }, provenance: { source: 'USGS', sourceUrl: 'x' } },
+  transportation: { available: true, value: { railWithinFiveKm: true, nearestRailDistanceMeters: 1000, railOwner: 'UP', passengerService: 'Amtrak', strategicRailNetwork: true }, provenance: { source: 'BTS', sourceUrl: 'x' } },
   bps: { available: true, value: { permitsPerThousand2023: 5, permitsPerThousand2024: 7, permitTrend: 40, totalPermits2024: 500, countyName: 'Travis County' }, provenance: { source: 'Census', sourceUrl: 'x' } },
   stormwater: { available: true, value: { drainageDirection: 'S', slopeTowardLowPoint: 2.5, hasPositiveOutfall: true, flatnessIndex: 0.6, estimatedDetentionSuitability: 'moderate' as const, nearestWaterBodyDistanceMeters: 0, screeningLevel: 'good' as const }, provenance: { source: 'USGS', sourceUrl: 'x' } },
   easements: { available: false, provenance: { source: 'No adapter', sourceUrl: 'x' }, error: 'No local adapter' },
+  authority: { available: true, value: { authorityName: 'Austin city', authorityType: 'incorporated-place', incorporatedPlace: 'Austin city', countyName: 'Travis County', stateCode: 'TX', sourceVintage: 'Current', coverageNote: 'Routing only', resolvedAt: new Date().toISOString() }, provenance: { source: 'Census', sourceUrl: 'x' } },
   fetchedAt: new Date().toISOString(),
 }
 
@@ -118,8 +126,8 @@ describe('analyzeSite — zoning regex', () => {
     const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: '', intendedUse: 'residential' }, official)
     expect(result.metrics.zoning.status).toBe('official')
     expect(result.metrics.zoning.score).toBe(70)
-    expect(result.metrics.zoning.detail).toContain('Austin profile')
-    expect(result.redFlags.some((flag) => flag.includes('Austin zoning overlay'))).toBe(true)
+    expect(result.metrics.zoning.detail).toContain('Austin/Travis development profile')
+    expect(result.redFlags.some((flag) => flag.includes('mapped zoning overlay'))).toBe(true)
     expect(result.unknowns).not.toContain('Zoning and future land use have not been verified.')
   })
 
@@ -208,6 +216,7 @@ describe('analyzeSite — parcel overlays', () => {
     contamination: { available: true, value: { facilityCount: 0, hasMajorFlag: false, facilityTypes: [], nearestName: '', bufferMeters: 100, samplePoints: 400 }, provenance: { source: 'EPA FRS', sourceUrl: 'x' } },
     species: { available: true, value: { criticalHabitatHit: false, criticalHabitatLayers: [], speciesCount: 0, habitatFraction: 0, samplePoints: 400 }, provenance: { source: 'USFWS ECOS', sourceUrl: 'x' } },
     setback: { available: true, value: { setbackFraction: 0.1, setbackDistanceMeters: 7.6, frontSetbackMeters: 7.6, sideSetbackMeters: 3.0, rearSetbackMeters: 7.6, intendedUse: 'residential', samplePoints: 400 }, provenance: { source: 'Setback', sourceUrl: 'x' } },
+    buildableEnvelope: { available: false, provenance: { source: 'LandLens', sourceUrl: '' }, error: 'Test fixture uses supplied net acreage.' },
     netDevelopable: { grossAcres: 10, floodwayAcres: 0, wetlandAcres: 0, steepSlopeAcres: 0, soilConstrainedAcres: 0, easementAcres: 0, setbackAcres: 1, constrainedAcres: 1, netDevelopableAcres: 9, netToGrossRatio: 0.9, samplePoints: 400 },
     fetchedAt: new Date().toISOString(),
   }
@@ -276,7 +285,7 @@ describe('analyzeSite — parcel overlays', () => {
     }
     const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, true, easeOverlays)
     expect(result.metrics.netDevelopable.displayValue).toContain('9 net / 10 gross')
-    expect(result.metrics.netDevelopable.detail).toContain('mapped easements/ROW')
+    expect(result.metrics.netDevelopable.detail).toContain('easements/ROW 1 ac')
   })
 
   it('easements overlay still renders unavailable when no adapter covers the state', () => {

@@ -93,7 +93,7 @@ export function normalizeAustinBaseDistrict(raw: string): string {
 
 export function getAustinBaseStandards(baseDistrict: string): DimensionalStandards | undefined {
   const standard = AUSTIN_BASE_STANDARDS[normalizeAustinBaseDistrict(baseDistrict)]
-  return standard ? { ...standard, notes: [...standard.notes] } : undefined
+  return standard ? { ...standard, sourceUrl: AUSTIN_STANDARDS_SOURCE_URL, notes: [...standard.notes] } : undefined
 }
 
 export function evaluateAustinUseCompatibility(baseDistrict: string, zoningCode: string, standardsApply: boolean): Record<IntendedUse, JurisdictionUseStatus> {
@@ -146,6 +146,9 @@ export function buildAustinJurisdictionProfile(input: AustinProfileInput): Juris
 
   return {
     profileId: 'austin-travis-v1',
+    packId: 'austin-travis',
+    profileLabel: 'Austin/Travis development',
+    profileDescription: 'Official City of Austin jurisdiction, zoning, high-impact overlays, neighborhood-plan future land use, principal base standards, and proposed-use screening.',
     authorityName: input.cityName || 'City of Austin',
     jurisdictionLabel: input.jurisdictionLabel || JURISDICTION_LABELS[jurisdictionCode || ''] || 'Austin planning area — jurisdiction not returned',
     jurisdictionType: JURISDICTION_LABELS[jurisdictionCode || ''] || input.jurisdictionLabel || 'Unknown',
@@ -158,6 +161,12 @@ export function buildAustinJurisdictionProfile(input: AustinProfileInput): Juris
     futureLandUse: formatAustinFutureLandUse(input.futureLandUse),
     useCompatibility: evaluateAustinUseCompatibility(baseDistrict, input.zoningCode, standardsApply),
     reviewFlags,
+    sources: [
+      { id: 'jurisdiction', label: 'Jurisdiction', url: AUSTIN_JURISDICTION_SOURCE_URL, role: 'authority' },
+      { id: 'overlays', label: 'Overlays', url: AUSTIN_OVERLAY_SOURCE_URL, role: 'overlays' },
+      { id: 'future-land-use', label: 'Future land use', url: AUSTIN_FLUM_SOURCE_URL, role: 'future-land-use' },
+      { id: 'standards', label: 'Base standards', url: AUSTIN_STANDARDS_SOURCE_URL, role: 'standards' },
+    ],
     verifiedAt: input.verifiedAt ?? new Date().toISOString(),
   }
 }

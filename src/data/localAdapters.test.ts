@@ -29,8 +29,12 @@ describe('localAdapters registry', () => {
     registerDefaultLocalAdapters()
     registerDefaultLocalAdapters() // idempotent — should not duplicate
     expect(hasLocalCoverage('easements', 'TX')).toBe(true)
+    expect(hasLocalCoverage('zoningAtlas', 'TX')).toBe(true)
+    expect(hasLocalCoverage('utilityCapacity', 'TX')).toBe(true)
     const summary = getLocalCoverageSummary()
     const travis = summary.easements.filter((j) => j === 'Travis County, TX')
     expect(travis).toHaveLength(1)
+    expect(summary.zoningAtlas).toContain('Austin/Travis jurisdiction pack')
+    expect(summary.utilityCapacity).toContain('Austin/Travis jurisdiction pack')
   })
 })

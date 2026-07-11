@@ -138,6 +138,10 @@ export function MapExplorer({ stateCode, coordinates, parcel, parcelLoading, ove
   const sfhaGeo = useMemo(() => multiRingsToGeoJSON(overlays?.floodplain.value?.sfhaPolygons), [overlays?.floodplain.value?.sfhaPolygons])
   const wetlandsGeo = useMemo(() => multiRingsToGeoJSON(overlays?.wetlands.value?.polygons), [overlays?.wetlands.value?.polygons])
   const habitatGeo = useMemo(() => flatRingsToGeoJSON(overlays?.species.value?.polygons), [overlays?.species.value?.polygons])
+  const buildableGeo = useMemo(() => {
+    const geometry = overlays?.buildableEnvelope.value?.geometry
+    return geometry ? { type: 'Feature' as const, properties: {}, geometry } : null
+  }, [overlays?.buildableEnvelope.value?.geometry])
 
   const parcelStatusLabel = parcelLoading
     ? 'Finding parcel…'
@@ -221,6 +225,7 @@ export function MapExplorer({ stateCode, coordinates, parcel, parcelLoading, ove
         )}
         <GeoJSON key={stateCode} data={getStateFeature(stateCode)} style={{ color: '#176b4b', weight: 1.5, opacity: 0.7, fillColor: '#7caf95', fillOpacity: 0.05, dashArray: '5 5' }} interactive={false} />
         {parcelFeature && <GeoJSON key={parcel?.id || `${coordinates.lat}-${coordinates.lng}`} data={parcelFeature} style={{ color: '#d86b16', weight: 4, opacity: 1, fillColor: '#f59f45', fillOpacity: 0.22 }} interactive={false} />}
+        {buildableGeo && <GeoJSON key="buildable-envelope" data={buildableGeo} style={{ color: '#087f5b', weight: 0.35, opacity: 0.45, fillColor: '#20c997', fillOpacity: 0.34 }} interactive={false} />}
         {/* Constraint polygon overlays — FEMA floodway (red), SFHA (blue), NWI wetlands (green), USFWS critical habitat (purple) */}
         {floodwayGeo && <GeoJSON key="floodway" data={floodwayGeo} style={{ color: '#c92a2a', weight: 2, opacity: 0.9, fillColor: '#c92a2a', fillOpacity: 0.35 }} interactive={false} />}
         {sfhaGeo && <GeoJSON key="sfha" data={sfhaGeo} style={{ color: '#1971c2', weight: 1, opacity: 0.7, fillColor: '#1971c2', fillOpacity: 0.15 }} interactive={false} />}

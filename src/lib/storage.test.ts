@@ -66,6 +66,7 @@ describe('storage', () => {
       },
       screeningArea: { kind: 'point' },
       parcel: { id: 'P-100', acres: 10, acreageKind: 'assessor', facts: { marketValue: 500_000, zoning: 'C2', yearBuilt: 2001 }, provenance: { source: 'County assessor', sourceUrl: 'https://example.gov' } },
+      authority: { authorityName: 'Austin city', authorityType: 'incorporated-place', incorporatedPlace: 'Austin city', countyName: 'Travis County', stateCode: 'TX', sourceVintage: 'Current Census geography', coverageNote: 'Routing baseline only', resolvedAt: '2026-07-10T00:00:00Z' },
       jurisdiction: {
         profileId: 'austin-travis-v1', authorityName: 'City of Austin', jurisdictionLabel: 'FULL PURPOSE', jurisdictionType: 'Austin full-purpose jurisdiction', jurisdictionCode: 'FULL',
         zoningCode: 'SF-3-NP', baseDistrict: 'SF-3', standardsApply: true, overlays: [], futureLandUse: 'Single Family',
@@ -81,6 +82,7 @@ describe('storage', () => {
     expect(loaded[0].id).toBe('test-1')
     expect(loaded[0].parcel?.facts).toEqual({ marketValue: 500_000, zoning: 'C2', yearBuilt: 2001 })
     expect(loaded[0].jurisdiction?.futureLandUse).toBe('Single Family')
+    expect(loaded[0].authority?.countyName).toBe('Travis County')
     expect(loaded[0].inputs.proposedUse).toBe('single_family')
   })
 

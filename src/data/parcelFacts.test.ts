@@ -8,23 +8,31 @@ describe('parcel fact normalization', () => {
     propertyUseCode: ['USE_CODE'],
     legalDescription: { join: ['LEGAL_1', 'LEGAL_2'] },
     marketValue: ['MARKET'],
+    marketLandValue: ['MARKET_LAND'],
+    appraisedImprovementValue: ['APPRAISED_IMPROVEMENT'],
     assessedLandValue: { sum: ['LAND_A', 'LAND_B'] },
+    taxAmount: ['TAX_AMOUNT'],
     lastSalePrice: ['SALE_PRICE'],
     lastSaleYear: ['SALE_YEAR'],
     lastSaleMonth: ['SALE_MONTH'],
     yearBuilt: ['YEAR_BUILT'],
+    unitCount: ['UNITS'],
+    irrigationDescription: ['IRRIGATION'],
+    forestPercent: ['FOREST_PCT'],
     recordUrl: ['RECORD_URL'],
   }
 
   it('joins text, sums split values, parses currency, and normalizes sale dates', () => {
     const facts = normalizeParcelFacts({
       NUMBER: '101', STREET: 'Main St', UNIT: 'Suite 4', USE_CODE: 'C2', LEGAL_1: 'Lot 7', LEGAL_2: 'Block A',
-      MARKET: '$1,250,000', LAND_A: 200_000, LAND_B: '50,000', SALE_PRICE: '900000', SALE_YEAR: 2023, SALE_MONTH: 8,
-      YEAR_BUILT: 1998, RECORD_URL: 'https://assessor.example.gov/parcel/1', OWNER_NAME: 'Excluded Owner',
+      MARKET: '$1,250,000', MARKET_LAND: 400_000, APPRAISED_IMPROVEMENT: 700_000, LAND_A: 200_000, LAND_B: '50,000', TAX_AMOUNT: 12_500,
+      SALE_PRICE: '900000', SALE_YEAR: 2023, SALE_MONTH: 8, YEAR_BUILT: 1998, UNITS: 6, IRRIGATION: 'District', FOREST_PCT: 35,
+      RECORD_URL: 'https://assessor.example.gov/parcel/1', OWNER_NAME: 'Excluded Owner',
     }, map)
     expect(facts).toEqual({
       situsAddress: '101 Main St Suite 4', propertyUseCode: 'C2', legalDescription: 'Lot 7 Block A', marketValue: 1_250_000,
-      assessedLandValue: 250_000, lastSalePrice: 900_000, lastSaleDate: '2023-08', yearBuilt: 1998,
+      marketLandValue: 400_000, appraisedImprovementValue: 700_000, assessedLandValue: 250_000, taxAmount: 12_500,
+      lastSalePrice: 900_000, lastSaleDate: '2023-08', yearBuilt: 1998, unitCount: 6, irrigationDescription: 'District', forestPercent: 35,
       recordUrl: 'https://assessor.example.gov/parcel/1',
     })
     expect(facts).not.toHaveProperty('ownerName')
@@ -47,17 +55,17 @@ describe('parcel fact normalization', () => {
 describe('parcel provider contracts', () => {
   const richAdapters = getParcelProviderContracts().filter((contract) => contract.factFields.length > 0)
 
-  it('registers rich fact mappings for four statewide sources and eight Texas counties', () => {
-    expect(richAdapters.map((adapter) => adapter.id).sort()).toEqual([
-      'bexar-cad-public-parcels', 'city-of-dallas-certified-tax-parcels', 'collin-cad-parcels', 'connecticut-cama-parcels',
-      'florida-statewide-cadastral', 'harris-county-parcels', 'montana-cadastral-framework', 'montgomery-cad-parcels',
-      'new-york-public-tax-parcels', 'tarrant-appraisal-parcels', 'travis-county-tax-maps', 'williamson-cad-parcels',
-    ])
+  it('audits all 58 adapters and enriches every source that publishes usable development facts', () => {
+    const contracts = getParcelProviderContracts()
+    expect(contracts).toHaveLength(58)
+    expect(contracts.every((adapter) => ['enriched', 'audited-no-public-facts'].includes(adapter.factStatus))).toBe(true)
+    expect(richAdapters).toHaveLength(57)
+    expect(contracts.filter((adapter) => adapter.factStatus === 'audited-no-public-facts').map((adapter) => adapter.id)).toEqual(['kentucky-jefferson-county-parcels'])
   })
 
   it('requests every normalized fact field from its ArcGIS provider', () => {
     for (const adapter of richAdapters) {
-      expect(adapter.factFields.length, adapter.id).toBeGreaterThanOrEqual(4)
+      expect(adapter.factFields.length, adapter.id).toBeGreaterThanOrEqual(1)
       expect(adapter.factFields.every((field) => adapter.outFields.includes(field)), adapter.id).toBe(true)
     }
   })

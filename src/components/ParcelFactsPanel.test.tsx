@@ -23,6 +23,22 @@ describe('ParcelFactsPanel', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
+  it('renders expanded nationwide valuation, record, improvement, and land details', () => {
+    render(<ParcelFactsPanel facts={{
+      zoningConditions: 'Conditional overlay', deedReference: 'Book 12 Page 44', platReference: 'Plat 8',
+      marketLandValue: 400_000, appraisedImprovementValue: 700_000, taxAmount: 12_500, saleQualification: 'Arms-length',
+      garageAreaSqFt: 600, stories: 2, unitCount: 4, irrigationDescription: 'Irrigation district', waterfrontDescription: 'Riverfront',
+      criticalAreaDescription: 'Critical Area 2', percTestArea: 1.25, agriculturalPreservationAcres: 8, forestPercent: 35,
+    }} />)
+    expect(screen.getByText('Conditional overlay')).toBeInTheDocument()
+    expect(screen.getByText('Book 12 Page 44')).toBeInTheDocument()
+    expect(screen.getByText('$400,000')).toBeInTheDocument()
+    expect(screen.getByText('$12,500')).toBeInTheDocument()
+    expect(screen.getByText('600 sq ft')).toBeInTheDocument()
+    expect(screen.getByText('Irrigation district')).toBeInTheDocument()
+    expect(screen.getByText('35%')).toBeInTheDocument()
+  })
+
   it('can omit its embedded heading inside the printable report section', () => {
     render(<ParcelFactsPanel facts={{ zoning: 'C2' }} showHeading={false} />)
     expect(screen.queryByText('Official parcel facts')).not.toBeInTheDocument()

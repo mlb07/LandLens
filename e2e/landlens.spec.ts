@@ -48,11 +48,12 @@ test('saves a site, compares it, and opens its report', async ({ page }) => {
   await expect(page.getByRole('button', { name: /Map explorer/i })).toBeVisible()
 
   await page.getByRole('button', { name: /Site inputs/i }).click()
+  await expect(page.getByText('50/50 states', { exact: true })).toBeVisible()
   await expect(page.getByText('Official parcel facts', { exact: true })).toBeVisible()
   await expect(page.getByText('$1,500,000', { exact: true })).toBeVisible()
   await expect(page.getByText('Local development profile', { exact: true })).toBeVisible()
   await expect(page.getByText('SF-3-NP · base SF-3', { exact: true })).toBeVisible()
-  await page.getByTestId('austin-proposed-use').selectOption('single_family')
+  await page.getByTestId('proposed-use').selectOption('single_family')
   await expect(page.getByText('Permitted in base table', { exact: true })).toBeVisible()
   await expect(page.getByText('Table cell: P', { exact: true })).toBeVisible()
   await page.getByLabel('Site name').fill('E2E screening tract')

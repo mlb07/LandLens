@@ -1,5 +1,5 @@
 import type { DataProvenance, IntendedUse, ScreeningArea } from '../types/site'
-import { boundaryAreaSquareMeters, boundaryToArcGISPolygon, gridSampleBoundary, pointInBoundary, pointToBoundaryDistanceMeters, pointToSegmentMeters, squareMetersToAcres, type GeoBoundary } from '../lib/geometry'
+import { boundaryAreaSquareMeters, boundaryBBox, boundaryToArcGISPolygon, gridSampleBoundary, pointInBoundary, pointToBoundaryDistanceMeters, pointToSegmentMeters, squareMetersToAcres, type GeoBoundary } from '../lib/geometry'
 import { fetchEasementsOverlayForParcel } from './localAdapters'
 import { externalRequest } from './externalRequest'
 
@@ -20,6 +20,7 @@ export interface FloodplainOverlay {
     zoneSummary: string          // e.g. "AE · X"
     risk: 'Low' | 'Moderate' | 'High' | 'Floodway' | 'Undetermined'
     samplePoints: number
+    constrainedGridIndices?: number[] // shared 400-point grid cells in regulatory floodway
     floodwayPolygons?: number[][][][]  // per-feature rings for map rendering (floodway only)
     sfhaPolygons?: number[][][][]      // per-feature rings for map rendering (non-floodway SFHA)
   }
@@ -33,6 +34,7 @@ export interface WetlandsOverlay {
     wetlandFraction: number      // 0–1 share of parcel with mapped wetlands/waters
     wetlandTypeCounts: Record<string, number>
     samplePoints: number
+    constrainedGridIndices?: number[] // shared 400-point grid cells in mapped wetlands/waters
     polygons?: number[][][][]    // per-feature rings for map rendering
   }
   provenance: DataProvenance
@@ -50,6 +52,7 @@ export interface SlopeOverlay {
     fractionOver30: number
     samplePoints: number
     spacingMeters: number
+    constraintSamples?: Array<{ lng: number; lat: number; over20: boolean }>
   }
   provenance: DataProvenance
   error?: string
@@ -92,6 +95,7 @@ export interface EasementsOverlay {
     easementTypes: string[]
     sourceLayer: string
     samplePoints: number
+    constrainedGridIndices?: number[] // present only when the adapter returned polygon geometry
   }
   provenance: DataProvenance
   error?: string
@@ -136,6 +140,7 @@ export interface SetbackOverlay {
     intendedUse: string              // the intended use that drove the distances
     standardsSource?: 'jurisdiction-code' | 'screening-default' // optional for legacy saved/test snapshots
     samplePoints: number
+    constrainedGridIndices?: number[] // shared 400-point grid cells inside the setback ring
   }
   provenance: DataProvenance
   error?: string
@@ -153,6 +158,26 @@ export interface NetDevelopableOverlay {
   netDevelopableAcres: number
   netToGrossRatio: number        // 0–1
   samplePoints: number
+  method?: 'shared-grid-union' | 'legacy-independence'
+}
+
+export interface BuildableEnvelopeOverlay {
+  available: boolean
+  value?: {
+    geometry: { type: 'MultiPolygon'; coordinates: number[][][][] }
+    spatialBuildableAcres: number
+    adjustedNetAcres: number
+    spatialConstraintFraction: number
+    aggregateAdjustmentFraction: number
+    buildableCellCount: number
+    totalCellCount: number
+    resolutionMeters: number
+    includedConstraints: string[]
+    aggregateAdjustments: string[]
+    method: 'shared-grid-union'
+  }
+  provenance: DataProvenance
+  error?: string
 }
 
 export interface ParcelOverlayData {
@@ -165,6 +190,7 @@ export interface ParcelOverlayData {
   contamination: ContaminationOverlay
   species: SpeciesOverlay
   setback: SetbackOverlay
+  buildableEnvelope: BuildableEnvelopeOverlay
   netDevelopable: NetDevelopableOverlay | null
   fetchedAt: string
 }
@@ -239,6 +265,13 @@ const SETBACK_PROVENANCE: DataProvenance = {
   sourceUrl: '',
   vintage: 'Conservative US-default front/side/rear setback distances by intended use',
   coverageNote: 'Perimeter setback applied to the parcel boundary using conservative US-default front/side/rear distances by intended use. The front edge is identified as the boundary edge closest to the selected pin location (a proxy for the road-facing side). Front/side/rear distances: residential 25/10/25 ft, mixed-use 30/15/20 ft, commercial 50/20/30 ft, industrial 50/30/30 ft, other 25/10/25 ft. These are screening defaults, not jurisdiction-specific ordinances. Local zoning codes, plat notes, and HOA covenants may require different distances. Verify with the local planning department before design.',
+}
+
+const BUILDABLE_ENVELOPE_PROVENANCE: DataProvenance = {
+  source: 'LandLens shared-grid buildable-envelope screen',
+  sourceUrl: '',
+  vintage: 'Computed from current parcel-overlay observations',
+  coverageNote: 'Screening geometry is the exact union of spatial constraints on the shared parcel grid: regulatory floodway, mapped wetlands, interpolated slope over 20%, polygon easements/ROW, and setbacks. NRCS soil shares and title-only easement flags lack parcel-level geometry and are applied separately as aggregate acreage adjustments. Raster cells are a visual approximation and may extend slightly across a parcel edge; this is not a survey, delineation, grading plan, title report, or legal building envelope.',
 }
 
 export interface SetbackStandardsInput {
@@ -344,7 +377,7 @@ async function fetchFloodplainOverlay(boundary: GeoBoundary, gridPoints: { lng: 
     if (!features.length) {
       return {
         available: true,
-        value: { sfhaFraction: 0, floodwayFraction: 0, floodwayInCore: false, zoneSummary: 'X (unmapped)', risk: 'Low', samplePoints: gridPoints.length },
+        value: { sfhaFraction: 0, floodwayFraction: 0, floodwayInCore: false, zoneSummary: 'X (unmapped)', risk: 'Low', samplePoints: gridPoints.length, constrainedGridIndices: [] },
         provenance: FEMA_PROVENANCE,
       }
     }
@@ -371,10 +404,12 @@ async function fetchFloodplainOverlay(boundary: GeoBoundary, gridPoints: { lng: 
 
     let sfhaCount = 0
     let floodwayCount = 0
-    for (const pt of gridPoints) {
+    const constrainedGridIndices: number[] = []
+    for (let pointIndex = 0; pointIndex < gridPoints.length; pointIndex += 1) {
+      const pt = gridPoints[pointIndex]
       for (const fp of floodPolygons) {
         if (pointInBoundary(pt.lng, pt.lat, { type: 'Polygon', coordinates: fp.polygon })) {
-          if (fp.floodway) { floodwayCount += 1; break }
+          if (fp.floodway) { floodwayCount += 1; constrainedGridIndices.push(pointIndex); break }
         }
       }
     }
@@ -400,7 +435,7 @@ async function fetchFloodplainOverlay(boundary: GeoBoundary, gridPoints: { lng: 
 
     return {
       available: true,
-      value: { sfhaFraction, floodwayFraction, floodwayInCore, zoneSummary, risk, samplePoints: total, floodwayPolygons, sfhaPolygons },
+      value: { sfhaFraction, floodwayFraction, floodwayInCore, zoneSummary, risk, samplePoints: total, constrainedGridIndices, floodwayPolygons, sfhaPolygons },
       provenance: FEMA_PROVENANCE,
     }
   } catch (error) {
@@ -434,7 +469,7 @@ async function fetchWetlandsOverlay(boundary: GeoBoundary, gridPoints: { lng: nu
     if (!features.length) {
       return {
         available: true,
-        value: { wetlandFraction: 0, wetlandTypeCounts: {}, samplePoints: gridPoints.length },
+        value: { wetlandFraction: 0, wetlandTypeCounts: {}, samplePoints: gridPoints.length, constrainedGridIndices: [] },
         provenance: NWI_PROVENANCE,
       }
     }
@@ -456,11 +491,14 @@ async function fetchWetlandsOverlay(boundary: GeoBoundary, gridPoints: { lng: nu
     }
 
     let wetlandCount = 0
+    const constrainedGridIndices: number[] = []
     const typeCounts: Record<string, number> = {}
-    for (const pt of gridPoints) {
+    for (let pointIndex = 0; pointIndex < gridPoints.length; pointIndex += 1) {
+      const pt = gridPoints[pointIndex]
       for (const wp of wetlandPolygons) {
         if (pointInBoundary(pt.lng, pt.lat, { type: 'Polygon', coordinates: wp.polygon })) {
           wetlandCount += 1
+          constrainedGridIndices.push(pointIndex)
           typeCounts[wp.type] = (typeCounts[wp.type] || 0) + 1
           break
         }
@@ -474,7 +512,7 @@ async function fetchWetlandsOverlay(boundary: GeoBoundary, gridPoints: { lng: nu
 
     return {
       available: true,
-      value: { wetlandFraction, wetlandTypeCounts: typeCounts, samplePoints: total, polygons },
+      value: { wetlandFraction, wetlandTypeCounts: typeCounts, samplePoints: total, constrainedGridIndices, polygons },
       provenance: NWI_PROVENANCE,
     }
   } catch (error) {
@@ -542,6 +580,7 @@ export function computeSlopeFromElevations(shared: SharedElevations): SlopeOverl
   const { points, spacingMeters, grid } = shared
   const cosLat = Math.cos(((points[0].lat + points[points.length - 1].lat) / 2) * Math.PI / 180)
   const slopes: number[] = []
+  const constraintSamples: Array<{ lng: number; lat: number; over20: boolean }> = []
   let maxSlope = 0
   let over15 = 0, over20 = 0, over30 = 0
 
@@ -573,6 +612,7 @@ export function computeSlopeFromElevations(shared: SharedElevations): SlopeOverl
     // Average of available directional gradients → representative local slope.
     const slopePercent = (gradients.reduce((a, b) => a + b, 0) / gradients.length) * 100
     slopes.push(slopePercent)
+    constraintSamples.push({ lng: center.lng, lat: center.lat, over20: slopePercent > 20 })
     if (slopePercent > maxSlope) maxSlope = slopePercent
     if (slopePercent > 15) over15 += 1
     if (slopePercent > 20) over20 += 1
@@ -599,6 +639,7 @@ export function computeSlopeFromElevations(shared: SharedElevations): SlopeOverl
       fractionOver30: over30 / count,
       samplePoints: count,
       spacingMeters: Math.round(spacingMeters),
+      constraintSamples,
     },
     provenance: USGS_PROVENANCE,
   }
@@ -936,10 +977,13 @@ export function computeEasementsOverlayFromAdapter(gridPoints: { lng: number; la
   }
 
   let hitCount = 0
+  const constrainedGridIndices: number[] = []
   const typeSet = new Set<string>(result.easementTypes)
-  for (const pt of gridPoints) {
+  for (let pointIndex = 0; pointIndex < gridPoints.length; pointIndex += 1) {
+    const pt = gridPoints[pointIndex]
     if (pointInBoundary(pt.lng, pt.lat, { type: 'Polygon', coordinates: result.polygonRings })) {
       hitCount += 1
+      constrainedGridIndices.push(pointIndex)
     }
   }
   const fraction = gridPoints.length ? hitCount / gridPoints.length : (result.hasRecordedEasements ? 1 : 0)
@@ -950,6 +994,7 @@ export function computeEasementsOverlayFromAdapter(gridPoints: { lng: number; la
       easementTypes: Array.from(typeSet),
       sourceLayer: result.sourceLayer,
       samplePoints: gridPoints.length,
+      constrainedGridIndices,
     },
     provenance: EASEMENTS_OVERLAY_PROVENANCE,
   }
@@ -1194,8 +1239,13 @@ export function computeSetbackOverlay(
     if (!pin) {
       const maxDist = Math.max(dists.front, dists.side, dists.rear)
       let constrainedCount = 0
-      for (const pt of gridPoints) {
-        if (pointToBoundaryDistanceMeters(pt.lng, pt.lat, boundary) < maxDist) constrainedCount += 1
+      const constrainedGridIndices: number[] = []
+      for (let pointIndex = 0; pointIndex < gridPoints.length; pointIndex += 1) {
+        const pt = gridPoints[pointIndex]
+        if (pointToBoundaryDistanceMeters(pt.lng, pt.lat, boundary) < maxDist) {
+          constrainedCount += 1
+          constrainedGridIndices.push(pointIndex)
+        }
       }
       const setbackFraction = gridPoints.length ? constrainedCount / gridPoints.length : 0
       return {
@@ -1209,6 +1259,7 @@ export function computeSetbackOverlay(
           intendedUse,
           standardsSource: standards ? 'jurisdiction-code' : 'screening-default',
           samplePoints: gridPoints.length,
+          constrainedGridIndices,
         },
         provenance,
       }
@@ -1242,7 +1293,9 @@ export function computeSetbackOverlay(
     // For each grid point, find the nearest edge and check against that
     // edge's classified setback distance.
     let constrainedCount = 0
-    for (const pt of gridPoints) {
+    const constrainedGridIndices: number[] = []
+    for (let pointIndex = 0; pointIndex < gridPoints.length; pointIndex += 1) {
+      const pt = gridPoints[pointIndex]
       let minDist = Number.POSITIVE_INFINITY
       let nearestClass: EdgeClass = 'side'
       for (let i = 0; i < outerRing.length - 1; i += 1) {
@@ -1259,7 +1312,10 @@ export function computeSetbackOverlay(
         }
       }
       const threshold = nearestClass === 'front' ? dists.front : nearestClass === 'rear' ? dists.rear : dists.side
-      if (minDist < threshold) constrainedCount += 1
+      if (minDist < threshold) {
+        constrainedCount += 1
+        constrainedGridIndices.push(pointIndex)
+      }
     }
 
     const setbackFraction = gridPoints.length ? constrainedCount / gridPoints.length : 0
@@ -1274,6 +1330,7 @@ export function computeSetbackOverlay(
         intendedUse,
         standardsSource: standards ? 'jurisdiction-code' : 'screening-default',
         samplePoints: gridPoints.length,
+        constrainedGridIndices,
       },
       provenance,
     }
@@ -1293,10 +1350,118 @@ export function recomputeSetbackAndNetDevelopable(
   const boundary = narrowBoundary(boundaryInput)
   const setback = computeSetbackOverlay(boundaryInput, intendedUse, pin, standards)
   const updated = { ...data, setback, fetchedAt: new Date().toISOString() }
-  return { ...updated, netDevelopable: computeNetDevelopable(boundary, updated) }
+  const buildableEnvelope = computeBuildableEnvelope(boundary, updated)
+  const withEnvelope = { ...updated, buildableEnvelope }
+  return { ...withEnvelope, netDevelopable: computeNetDevelopable(boundary, withEnvelope) }
 }
 
 // ─── Net developable acreage ────────────────────────────────────────────
+
+function nearestSlopeConstraint(
+  point: { lng: number; lat: number },
+  samples: Array<{ lng: number; lat: number; over20: boolean }>,
+): boolean {
+  const cosLat = Math.cos(point.lat * Math.PI / 180)
+  let nearest: { over20: boolean; distance: number } | null = null
+  for (const sample of samples) {
+    const dx = (sample.lng - point.lng) * cosLat
+    const dy = sample.lat - point.lat
+    const distance = dx * dx + dy * dy
+    if (!nearest || distance < nearest.distance) nearest = { over20: sample.over20, distance }
+  }
+  return nearest?.over20 ?? false
+}
+
+function gridCellGeometry(
+  point: { lng: number; lat: number },
+  halfLng: number,
+  halfLat: number,
+): number[][][] {
+  const west = point.lng - halfLng
+  const east = point.lng + halfLng
+  const south = point.lat - halfLat
+  const north = point.lat + halfLat
+  return [[
+    [west, south], [east, south], [east, north], [west, north], [west, south],
+  ]]
+}
+
+/**
+ * Builds a screening-level spatial envelope from the exact union of every
+ * constraint that can be classified on the shared parcel grid. Sources that
+ * only return parcel-wide shares are deliberately kept out of the geometry
+ * and applied once as transparent aggregate acreage adjustments.
+ */
+export function computeBuildableEnvelope(
+  boundary: GeoBoundary,
+  overlays: ParcelOverlayData,
+): BuildableEnvelopeOverlay {
+  const grossM2 = boundaryAreaSquareMeters(boundary)
+  const { points, spacingMeters } = gridSampleBoundary(boundary, 400)
+  if (grossM2 <= 0 || !points.length) {
+    return { available: false, provenance: BUILDABLE_ENVELOPE_PROVENANCE, error: 'Parcel boundary has no measurable interior grid.' }
+  }
+
+  const constrained = new Set<number>()
+  const includedConstraints: string[] = []
+  const addMask = (label: string, indices: number[] | undefined) => {
+    if (!indices) return
+    includedConstraints.push(label)
+    for (const index of indices) if (index >= 0 && index < points.length) constrained.add(index)
+  }
+  addMask('FEMA regulatory floodway', overlays.floodplain.value?.constrainedGridIndices)
+  addMask('NWI mapped wetlands/waters', overlays.wetlands.value?.constrainedGridIndices)
+  addMask('Mapped easements/ROW', overlays.easements.value?.constrainedGridIndices)
+  addMask('Perimeter setbacks', overlays.setback.value?.constrainedGridIndices)
+
+  const slopeSamples = overlays.slope.value?.constraintSamples
+  if (slopeSamples?.length) {
+    includedConstraints.push('USGS-derived slope over 20% (nearest-sample interpolation)')
+    for (let index = 0; index < points.length; index += 1) {
+      if (nearestSlopeConstraint(points[index], slopeSamples)) constrained.add(index)
+    }
+  }
+
+  const grossAcres = squareMetersToAcres(grossM2)
+  const buildableIndices = points.map((_, index) => index).filter((index) => !constrained.has(index))
+  const spatialBuildableFraction = buildableIndices.length / points.length
+  const spatialBuildableAcres = grossAcres * spatialBuildableFraction
+
+  const aggregateAdjustments: string[] = []
+  const soilFraction = Math.max(overlays.soils.value?.hydricFraction ?? 0, overlays.soils.value?.severeFraction ?? 0)
+  if (soilFraction > 0) aggregateAdjustments.push('NRCS hydric/severe soil share')
+  const easementFraction = overlays.easements.value?.constrainedGridIndices === undefined
+    ? overlays.easements.value?.easementFraction ?? 0
+    : 0
+  if (easementFraction > 0) aggregateAdjustments.push('Recorded-easement flag without mapped geometry')
+  const aggregateAdjustmentFraction = 1 - (1 - soilFraction) * (1 - easementFraction)
+  const adjustedNetAcres = spatialBuildableAcres * (1 - aggregateAdjustmentFraction)
+
+  const bbox = boundaryBBox(boundary)
+  const uniqueLng = [...new Set(points.map((point) => point.lng))].sort((a, b) => a - b)
+  const uniqueLat = [...new Set(points.map((point) => point.lat))].sort((a, b) => a - b)
+  const dLng = uniqueLng.length > 1 ? uniqueLng[1] - uniqueLng[0] : Math.max(0.000001, bbox.east - bbox.west)
+  const dLat = uniqueLat.length > 1 ? uniqueLat[1] - uniqueLat[0] : Math.max(0.000001, bbox.north - bbox.south)
+  const coordinates = buildableIndices.map((index) => gridCellGeometry(points[index], dLng / 2, dLat / 2))
+
+  return {
+    available: true,
+    value: {
+      geometry: { type: 'MultiPolygon', coordinates },
+      spatialBuildableAcres: Math.round(spatialBuildableAcres * 100) / 100,
+      adjustedNetAcres: Math.round(adjustedNetAcres * 100) / 100,
+      spatialConstraintFraction: Math.round((constrained.size / points.length) * 1000) / 1000,
+      aggregateAdjustmentFraction: Math.round(aggregateAdjustmentFraction * 1000) / 1000,
+      buildableCellCount: buildableIndices.length,
+      totalCellCount: points.length,
+      resolutionMeters: Math.round(spacingMeters),
+      includedConstraints,
+      aggregateAdjustments,
+      method: 'shared-grid-union',
+    },
+    provenance: BUILDABLE_ENVELOPE_PROVENANCE,
+  }
+}
 
 export function computeNetDevelopable(
   boundary: GeoBoundary,
@@ -1321,14 +1486,10 @@ export function computeNetDevelopable(
   const easementFraction = overlays.easements.value?.easementFraction ?? 0
   const setbackFraction = overlays.setback.value?.setbackFraction ?? 0
 
-  // Grid-based union: each constraint is measured against the same grid, so
-  // the true union requires checking each point against all constraints. Since
-  // we computed fractions independently, we use the independence approximation
-  // for the union: 1 - (1-a)(1-b)(1-c)(1-d)(1-e)(1-f). This slightly
-  // overestimates overlap but is conservative (overcounts constrained land)
-  // which is safer for screening.
-  const constrainedFraction =
-    1 - (1 - floodwayFraction) * (1 - wetlandFraction) * (1 - steepFraction)
+  const exactEnvelope = overlays.buildableEnvelope?.available ? overlays.buildableEnvelope.value : undefined
+  const constrainedFraction = exactEnvelope
+    ? 1 - exactEnvelope.adjustedNetAcres / grossAcres
+    : 1 - (1 - floodwayFraction) * (1 - wetlandFraction) * (1 - steepFraction)
           * (1 - soilFraction) * (1 - easementFraction) * (1 - setbackFraction)
 
   const floodwayAcres = grossAcres * floodwayFraction
@@ -1338,7 +1499,7 @@ export function computeNetDevelopable(
   const easementAcres = grossAcres * easementFraction
   const setbackAcres = grossAcres * setbackFraction
   const constrainedAcres = grossAcres * constrainedFraction
-  const netDevelopableAcres = Math.max(0, grossAcres - constrainedAcres)
+  const netDevelopableAcres = exactEnvelope?.adjustedNetAcres ?? Math.max(0, grossAcres - constrainedAcres)
   const netToGrossRatio = grossAcres > 0 ? netDevelopableAcres / grossAcres : 0
 
   return {
@@ -1360,6 +1521,7 @@ export function computeNetDevelopable(
       ?? overlays.easements.value?.samplePoints
       ?? overlays.setback.value?.samplePoints
       ?? 0,
+    method: exactEnvelope ? 'shared-grid-union' : 'legacy-independence',
   }
 }
 
@@ -1386,6 +1548,7 @@ export async function fetchParcelOverlays(
     contamination: { available: false, provenance: CONTAMINATION_OVERLAY_PROVENANCE, error: 'Pending' },
     species: { available: false, provenance: SPECIES_OVERLAY_PROVENANCE, error: 'Pending' },
     setback: { available: false, provenance: SETBACK_PROVENANCE, error: 'Pending' },
+    buildableEnvelope: { available: false, provenance: BUILDABLE_ENVELOPE_PROVENANCE, error: 'Pending' },
     netDevelopable: null,
     fetchedAt: new Date().toISOString(),
   }
@@ -1394,14 +1557,15 @@ export async function fetchParcelOverlays(
   function publish(category: ParcelOverlayCategory, observation: ParcelOverlayData[ParcelOverlayCategory]) {
     data = { ...data, [category]: observation, fetchedAt: new Date().toISOString() }
     remaining.delete(category)
-    // Try computing net developable incrementally as overlays land.
+    // Rebuild the shared-grid envelope and acreage as each source lands so the
+    // UI never shows a stale independence estimate during progressive loading.
     const anyAvailable =
       data.floodplain.available || data.wetlands.available || data.slope.available
       || data.soils.available || data.easements.available
-    if (anyAvailable && remaining.size === 0) {
-      data = { ...data, netDevelopable: computeNetDevelopable(boundary, data) }
-    } else if (anyAvailable && !data.netDevelopable) {
-      data = { ...data, netDevelopable: computeNetDevelopable(boundary, data) }
+    if (anyAvailable) {
+      const buildableEnvelope = computeBuildableEnvelope(boundary, data)
+      const withEnvelope = { ...data, buildableEnvelope }
+      data = { ...withEnvelope, netDevelopable: computeNetDevelopable(boundary, withEnvelope) }
     }
     onProgress?.({ data, pending: [...remaining] })
   }
@@ -1434,8 +1598,10 @@ export async function fetchParcelOverlays(
     Promise.resolve(publish('setback', computeSetbackOverlay(boundaryInput, 'residential', coordinates))),
   ])
 
-  // Final net developable computation.
-  data = { ...data, netDevelopable: computeNetDevelopable(boundary, data), fetchedAt: new Date().toISOString() }
+  // Final envelope + net developable computation.
+  const buildableEnvelope = computeBuildableEnvelope(boundary, data)
+  const withEnvelope = { ...data, buildableEnvelope }
+  data = { ...withEnvelope, netDevelopable: computeNetDevelopable(boundary, withEnvelope), fetchedAt: new Date().toISOString() }
   onProgress?.({ data, pending: [] })
   return data
 }

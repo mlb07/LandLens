@@ -3,6 +3,7 @@ import {
   computeSlopeFromElevations,
   computeStormwaterFromElevations,
   computeEasementsOverlayFromAdapter,
+  computeBuildableEnvelope,
   computeNetDevelopable,
   computeSetbackOverlay,
   ringsToWkt,
@@ -199,6 +200,7 @@ describe('computeNetDevelopable', () => {
       contamination: { available: true, value: { facilityCount: 0, hasMajorFlag: false, facilityTypes: [], nearestName: '', bufferMeters: 100, samplePoints: 400 }, provenance: { source: 'EPA FRS', sourceUrl: 'x' } },
       species: { available: true, value: { criticalHabitatHit: false, criticalHabitatLayers: [], speciesCount: 0, habitatFraction: 0, samplePoints: 400 }, provenance: { source: 'USFWS ECOS', sourceUrl: 'x' } },
       setback: { available: true, value: { setbackFraction: 0, setbackDistanceMeters: 7.6, frontSetbackMeters: 7.6, sideSetbackMeters: 3.0, rearSetbackMeters: 7.6, intendedUse: 'residential', samplePoints: 400 }, provenance: { source: 'Setback', sourceUrl: 'x' } },
+      buildableEnvelope: { available: false, provenance: { source: 'LandLens', sourceUrl: '' }, error: 'Not computed' },
       netDevelopable: null,
       fetchedAt: new Date().toISOString(),
       ...overrides,
@@ -217,6 +219,42 @@ describe('computeNetDevelopable', () => {
     expect(nd!.constrainedAcres).toBe(0)
     expect(nd!.soilConstrainedAcres).toBe(0)
     expect(nd!.easementAcres).toBe(0)
+  })
+
+  it('counts overlapping spatial constraints once in the shared-grid union', () => {
+    const total = gridSampleBoundary(SQUARE_BOUNDARY, 400).points.length
+    const overlappingMask = Array.from({ length: Math.min(40, total) }, (_, index) => index)
+    const overlays = makeOverlays({
+      floodplain: { available: true, value: { sfhaFraction: 0.2, floodwayFraction: overlappingMask.length / total, floodwayInCore: true, zoneSummary: 'AE', risk: 'Floodway', samplePoints: total, constrainedGridIndices: overlappingMask }, provenance: { source: 'FEMA', sourceUrl: 'x' } },
+      wetlands: { available: true, value: { wetlandFraction: overlappingMask.length / total, wetlandTypeCounts: {}, samplePoints: total, constrainedGridIndices: overlappingMask }, provenance: { source: 'NWI', sourceUrl: 'x' } },
+      setback: { available: true, value: { setbackFraction: 0, setbackDistanceMeters: 7.6, frontSetbackMeters: 7.6, sideSetbackMeters: 3, rearSetbackMeters: 7.6, intendedUse: 'residential', samplePoints: total, constrainedGridIndices: [] }, provenance: { source: 'Setback', sourceUrl: 'x' } },
+    })
+    const envelope = computeBuildableEnvelope(SQUARE_BOUNDARY, overlays)
+    const withEnvelope = { ...overlays, buildableEnvelope: envelope }
+    const nd = computeNetDevelopable(SQUARE_BOUNDARY, withEnvelope)
+
+    expect(envelope.available).toBe(true)
+    expect(envelope.value!.spatialConstraintFraction).toBeCloseTo(overlappingMask.length / total, 3)
+    expect(envelope.value!.buildableCellCount).toBe(total - overlappingMask.length)
+    expect(envelope.value!.geometry.coordinates).toHaveLength(total - overlappingMask.length)
+    expect(nd!.method).toBe('shared-grid-union')
+    expect(nd!.netToGrossRatio).toBeCloseTo(1 - overlappingMask.length / total, 2)
+  })
+
+  it('applies non-spatial soil shares after the exact spatial union', () => {
+    const total = gridSampleBoundary(SQUARE_BOUNDARY, 400).points.length
+    const spatialMask = Array.from({ length: Math.min(40, total) }, (_, index) => index)
+    const overlays = makeOverlays({
+      floodplain: { available: true, value: { sfhaFraction: 0, floodwayFraction: spatialMask.length / total, floodwayInCore: true, zoneSummary: 'AE', risk: 'Floodway', samplePoints: total, constrainedGridIndices: spatialMask }, provenance: { source: 'FEMA', sourceUrl: 'x' } },
+      soils: { available: true, value: { hydricFraction: 0.2, severeFraction: 0.1, moderateFraction: 0, dominantRating: 'severe', soilTypeCounts: {}, samplePoints: total }, provenance: { source: 'NRCS', sourceUrl: 'x' } },
+    })
+    const envelope = computeBuildableEnvelope(SQUARE_BOUNDARY, overlays)
+    const spatialRatio = 1 - spatialMask.length / total
+
+    expect(envelope.value!.aggregateAdjustmentFraction).toBe(0.2)
+    expect(envelope.value!.aggregateAdjustments).toContain('NRCS hydric/severe soil share')
+    expect(envelope.value!.adjustedNetAcres).toBeCloseTo(envelope.value!.spatialBuildableAcres * 0.8, 1)
+    expect(envelope.value!.adjustedNetAcres / (envelope.value!.spatialBuildableAcres / spatialRatio)).toBeCloseTo(spatialRatio * 0.8, 2)
   })
 
   it('subtracts floodway fraction from net developable', () => {

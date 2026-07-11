@@ -1,12 +1,6 @@
 export type TriState = 'yes' | 'no' | 'unknown'
 export type IntendedUse = 'residential' | 'commercial' | 'mixed-use' | 'industrial' | 'other'
-export type AustinProposedUse =
-  | 'single_family' | 'duplex' | 'two_family' | 'multifamily' | 'townhouse' | 'condominium' | 'mobile_home' | 'bed_breakfast_group1'
-  | 'professional_office' | 'medical_office_small' | 'general_retail_convenience' | 'general_retail_general'
-  | 'restaurant_limited' | 'restaurant_general' | 'food_sales' | 'personal_services' | 'hotel_motel'
-  | 'indoor_entertainment' | 'automotive_repair' | 'convenience_storage'
-  | 'custom_manufacturing' | 'light_manufacturing' | 'limited_warehousing' | 'general_warehousing'
-  | 'community_garden' | 'urban_farm' | 'daycare_limited' | 'daycare_general' | 'daycare_commercial' | 'religious_assembly'
+export type ProposedUseId = string
 export type DataStatus = 'official' | 'user' | 'unknown' | 'mock'
 export type VerdictTone = 'strong' | 'interesting' | 'research' | 'weak' | 'manual'
 
@@ -21,7 +15,7 @@ export interface SiteInputs {
   location: string
   estimatedPrice: string
   intendedUse: IntendedUse
-  proposedUse?: AustinProposedUse
+  proposedUse?: ProposedUseId
   roadFrontage: TriState
   utilitiesNearby: TriState
   zoningNotes: string
@@ -66,6 +60,16 @@ export interface MetricResult {
   provenance?: DataProvenance
 }
 
+export interface NationalContextFinding {
+  id: 'drinking-water' | 'wastewater' | 'broadband' | 'protected-lands' | 'rail'
+  label: string
+  status: 'mapped' | 'not-mapped' | 'reference-only' | 'unavailable'
+  summary: string
+  detail: string
+  provenance?: DataProvenance
+  actionUrl?: string
+}
+
 // A hard gate is a condition serious enough to send the parcel straight to
 // manual diligence regardless of the weighted score. The numeric score is
 // still computed for transparency but the verdict becomes "Manual diligence
@@ -90,6 +94,7 @@ export interface SiteAnalysis {
   hardGates: HardGate[]
   gatedToManual: boolean
   metrics: Record<ScoreCategory, MetricResult>
+  nationalContext?: NationalContextFinding[]
   strengths: string[]
   redFlags: string[]
   unknowns: string[]
@@ -104,9 +109,26 @@ export interface SavedSite {
   analysis: SiteAnalysis
   screeningArea?: ScreeningArea
   parcel?: ParcelSnapshot
+  authority?: JurisdictionAuthority
   jurisdiction?: JurisdictionProfile
+  buildableEnvelope?: BuildableEnvelopeSnapshot
   createdAt: string
   updatedAt: string
+}
+
+export interface BuildableEnvelopeSnapshot {
+  geometry: { type: 'MultiPolygon'; coordinates: number[][][][] }
+  spatialBuildableAcres: number
+  adjustedNetAcres: number
+  spatialConstraintFraction: number
+  aggregateAdjustmentFraction: number
+  buildableCellCount: number
+  totalCellCount: number
+  resolutionMeters: number
+  includedConstraints: string[]
+  aggregateAdjustments: string[]
+  method: 'shared-grid-union'
+  provenance?: DataProvenance
 }
 
 export type JurisdictionUseStatus = 'likely-compatible' | 'conditional-review' | 'likely-incompatible' | 'unresolved'
@@ -130,11 +152,59 @@ export interface DimensionalStandards {
   maximumImperviousCoverPercent?: number
   maximumFloorAreaRatio?: number
   sourceSection: string
+  sourceUrl?: string
   notes: string[]
+}
+
+export interface JurisdictionSource {
+  id: string
+  label: string
+  url: string
+  role: 'authority' | 'zoning' | 'overlays' | 'future-land-use' | 'standards' | 'permitted-uses' | 'other'
+}
+
+export interface JurisdictionAuthority {
+  authorityName: string
+  authorityType: 'incorporated-place' | 'county-subdivision' | 'county' | 'unresolved'
+  incorporatedPlace?: string
+  countySubdivision?: string
+  countyName?: string
+  stateName?: string
+  stateCode: string
+  geoid?: string
+  sourceVintage: string
+  coverageNote: string
+  resolvedAt: string
+}
+
+export type ProposedUseStatus = 'permitted' | 'conditional' | 'prohibited' | 'special-review' | 'unresolved'
+
+export interface ProposedUseDefinition {
+  key: ProposedUseId
+  label: string
+  codeLabel: string
+  group: string
+  intendedUse: IntendedUse
+}
+
+export interface ProposedUseAssessment {
+  proposedUse: ProposedUseId
+  useLabel: string
+  district: string
+  status: ProposedUseStatus
+  statusLabel: string
+  rawCell?: string
+  sourceSection: string
+  requiresCombiningDistrictReview: boolean
+  requiresOverlayReview: boolean
+  explanation: string
 }
 
 export interface JurisdictionProfile {
   profileId: string
+  packId?: string
+  profileLabel?: string
+  profileDescription?: string
   authorityName: string
   jurisdictionLabel: string
   jurisdictionType: string
@@ -147,6 +217,7 @@ export interface JurisdictionProfile {
   futureLandUse?: string
   useCompatibility: Record<IntendedUse, JurisdictionUseStatus>
   reviewFlags: string[]
+  sources?: JurisdictionSource[]
   verifiedAt: string
 }
 
@@ -157,34 +228,67 @@ export interface ParcelFacts {
   propertyUseCode?: string
   propertyUseDescription?: string
   propertyClass?: string
+  landStatus?: string
+  planningAreaDescription?: string
   zoning?: string
+  zoningConditions?: string
   legalDescription?: string
   subdivision?: string
+  deedReference?: string
+  platReference?: string
+  recordedDate?: string
   marketValue?: number
+  marketLandValue?: number
+  marketImprovementValue?: number
   appraisedValue?: number
+  appraisedLandValue?: number
+  appraisedImprovementValue?: number
   assessedTotalValue?: number
   assessedLandValue?: number
   assessedImprovementValue?: number
+  assessedOtherValue?: number
   taxableValue?: number
+  taxAmount?: number
   lastSalePrice?: number
   lastSaleDate?: string
+  saleQualification?: string
   taxYear?: string
   yearBuilt?: number
+  effectiveYearBuilt?: number
   buildingDescription?: string
+  buildingQuality?: string
   buildingCount?: number
   buildingAreaSqFt?: number
   livingAreaSqFt?: number
+  lotAreaSqFt?: number
+  garageAreaSqFt?: number
+  carportAreaSqFt?: number
+  stories?: number
+  unitCount?: number
+  roomCount?: number
+  bedroomCount?: number
+  bathroomCount?: number
+  halfBathroomCount?: number
+  fireplaceCount?: number
+  poolDescription?: string
   frontageFeet?: number
   depthFeet?: number
   waterService?: string
   sewerService?: string
   utilities?: string
   accessDescription?: string
+  irrigationDescription?: string
+  waterfrontDescription?: string
+  permitDescription?: string
+  criticalAreaDescription?: string
+  percTestArea?: number
   agriculturalAcres?: number
+  agriculturalPreservationAcres?: number
   croplandAcres?: number
   forestAcres?: number
   grazingAcres?: number
   irrigatedAcres?: number
+  forestPercent?: number
   recordUrl?: string
 }
 

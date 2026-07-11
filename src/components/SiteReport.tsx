@@ -6,7 +6,8 @@ import { getStateDefinition } from '../data/states'
 import type { HardGate, SavedSite, ScreeningArea } from '../types/site'
 import { ParcelFactsPanel } from './ParcelFactsPanel'
 import { JurisdictionPanel } from './JurisdictionPanel'
-import { getAustinProposedUseDefinition } from '../data/austinPermittedUses'
+import { getJurisdictionProposedUseDefinition } from '../data/jurisdictions/registry'
+import { NationalContextPanel } from './NationalContextPanel'
 
 const reportIcon = L.divIcon({ className: 'landlens-marker-wrap', html: '<div class="landlens-marker"><span></span></div>', iconSize: [38, 46], iconAnchor: [19, 43] })
 
@@ -42,14 +43,20 @@ export function SiteReport({ site, onBack }: { site: SavedSite; onBack: () => vo
   const state = getStateDefinition(site.stateCode)
   const parcelBoundary = site.screeningArea?.kind === 'parcel' ? site.screeningArea.boundary : undefined
   const parcelFeature = parcelBoundary ? { type: 'Feature' as const, properties: {}, geometry: parcelBoundary } : undefined
+  const buildableFeature = site.buildableEnvelope?.geometry
+    ? { type: 'Feature' as const, properties: {}, geometry: site.buildableEnvelope.geometry }
+    : undefined
   const triggeredGates = analysis.hardGates.filter((gate) => gate.triggered)
   const hasParcelFacts = Boolean(site.parcel?.facts)
-  const hasJurisdiction = Boolean(site.jurisdiction)
+  const hasJurisdiction = Boolean(site.jurisdiction || site.authority)
+  const hasNationalContext = Boolean(analysis.nationalContext?.length)
+  const proposedUseDefinition = getJurisdictionProposedUseDefinition(site.jurisdiction, inputs.proposedUse)
   const sectionNumber = (value: number) => String(value).padStart(2, '0')
-  const parcelNumber = sectionNumber(3 + (hasJurisdiction ? 1 : 0))
-  const suppliedNumber = sectionNumber(3 + (hasJurisdiction ? 1 : 0) + (hasParcelFacts ? 1 : 0))
-  const checklistNumber = sectionNumber(4 + (hasJurisdiction ? 1 : 0) + (hasParcelFacts ? 1 : 0))
-  const researchNumber = sectionNumber(5 + (hasJurisdiction ? 1 : 0) + (hasParcelFacts ? 1 : 0))
+  const jurisdictionNumber = sectionNumber(3 + (hasNationalContext ? 1 : 0))
+  const parcelNumber = sectionNumber(3 + (hasNationalContext ? 1 : 0) + (hasJurisdiction ? 1 : 0))
+  const suppliedNumber = sectionNumber(3 + (hasNationalContext ? 1 : 0) + (hasJurisdiction ? 1 : 0) + (hasParcelFacts ? 1 : 0))
+  const checklistNumber = sectionNumber(4 + (hasNationalContext ? 1 : 0) + (hasJurisdiction ? 1 : 0) + (hasParcelFacts ? 1 : 0))
+  const researchNumber = sectionNumber(5 + (hasNationalContext ? 1 : 0) + (hasJurisdiction ? 1 : 0) + (hasParcelFacts ? 1 : 0))
   return (
     <main className="report-page">
       <div className="report-toolbar no-print">
@@ -75,10 +82,11 @@ export function SiteReport({ site, onBack }: { site: SavedSite; onBack: () => vo
           <MapContainer center={[coordinates.lat, coordinates.lng]} zoom={13} zoomControl={false} dragging={false} scrollWheelZoom={false} doubleClickZoom={false} attributionControl>
             <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
             {parcelFeature && <GeoJSON data={parcelFeature} style={{ color: '#d86b16', weight: 4, opacity: 1, fillColor: '#f59f45', fillOpacity: 0.22 }} interactive={false} />}
+            {buildableFeature && <GeoJSON data={buildableFeature} style={{ color: '#087f5b', weight: 0.35, opacity: 0.45, fillColor: '#20c997', fillOpacity: 0.36 }} interactive={false} />}
             <Marker position={[coordinates.lat, coordinates.lng]} icon={reportIcon} />
             <ReportParcelViewport boundary={parcelBoundary} />
           </MapContainer>
-          <div className="report-map-label"><strong>{parcelBoundary ? 'Selected parcel' : 'Selected location'}</strong><span>{parcelBoundary ? `${inputs.acres || 'Unknown'} acres supplied by the parcel record; approximate boundary, not a survey.` : 'Map preview for orientation only. Parcel boundaries are not available.'}</span></div>
+          <div className="report-map-label"><strong>{buildableFeature ? 'Screening buildable envelope' : parcelBoundary ? 'Selected parcel' : 'Selected location'}</strong><span>{buildableFeature ? `${site.buildableEnvelope!.adjustedNetAcres.toFixed(2)} adjusted net acres · exact shared-grid union of spatial constraints; raster approximation, not a survey or legal building envelope.` : parcelBoundary ? `${inputs.acres || 'Unknown'} acres supplied by the parcel record; approximate boundary, not a survey.` : 'Map preview for orientation only. Parcel boundaries are not available.'}</span></div>
         </section>
         <section className="report-section">
           <div className="report-section-title"><span>01</span><div><h2>Score breakdown</h2><p>Each category contributes its listed weight to the final score. Unscored categories had no verified source.</p></div></div>
@@ -97,10 +105,16 @@ export function SiteReport({ site, onBack }: { site: SavedSite; onBack: () => vo
             <Finding title="Unknowns" icon={<CircleHelp />} items={analysis.unknowns} tone="unknown" />
           </div>
         </section>
+        {hasNationalContext && (
+          <section className="report-section report-national-context">
+            <div className="report-section-title"><span>03</span><div><h2>National infrastructure & protected-land context</h2><p>Current federal screening layers with their source limitations preserved.</p></div></div>
+            <NationalContextPanel findings={analysis.nationalContext} showHeading={false} />
+          </section>
+        )}
         {hasJurisdiction && (
           <section className="report-section report-jurisdiction">
-            <div className="report-section-title"><span>03</span><div><h2>Local development profile</h2><p>Official Austin jurisdiction, zoning, overlay, future-land-use, and principal base-standard screen.</p></div></div>
-            <JurisdictionPanel profile={site.jurisdiction} intendedUse={inputs.intendedUse} proposedUse={inputs.proposedUse} showHeading={false} />
+            <div className="report-section-title"><span>{jurisdictionNumber}</span><div><h2>{site.jurisdiction ? 'Local development profile' : 'National authority context'}</h2><p>{site.jurisdiction?.profileDescription ?? site.authority?.coverageNote}</p></div></div>
+            <JurisdictionPanel profile={site.jurisdiction} authority={site.authority} intendedUse={inputs.intendedUse} proposedUse={inputs.proposedUse} showHeading={false} />
           </section>
         )}
         {hasParcelFacts && (
@@ -112,7 +126,7 @@ export function SiteReport({ site, onBack }: { site: SavedSite; onBack: () => vo
         <section className="report-section report-site-facts">
           <div className="report-section-title"><span>{suppliedNumber}</span><div><h2>Site facts supplied</h2><p>These entries have not been independently verified.</p></div></div>
           <dl>
-            <div><dt>Acres</dt><dd>{inputs.acres || 'Unknown'}</dd></div><div><dt>Estimated price</dt><dd>{inputs.estimatedPrice ? `$${Number(inputs.estimatedPrice).toLocaleString()}` : 'Unknown'}</dd></div><div><dt>Intended use</dt><dd>{inputs.intendedUse.replace('-', ' ')}{inputs.proposedUse ? ` · ${getAustinProposedUseDefinition(inputs.proposedUse)?.label ?? inputs.proposedUse}` : ''}</dd></div><div><dt>Road frontage</dt><dd>{inputs.roadFrontage}</dd></div><div><dt>Utilities nearby</dt><dd>{inputs.utilitiesNearby}</dd></div><div><dt>Data confidence</dt><dd>{analysis.confidence}%</dd></div>
+            <div><dt>Acres</dt><dd>{inputs.acres || 'Unknown'}</dd></div>{site.buildableEnvelope && <div><dt>Adjusted net acres</dt><dd>{site.buildableEnvelope.adjustedNetAcres.toFixed(2)}</dd></div>}<div><dt>Estimated price</dt><dd>{inputs.estimatedPrice ? `$${Number(inputs.estimatedPrice).toLocaleString()}` : 'Unknown'}</dd></div><div><dt>Intended use</dt><dd>{inputs.intendedUse.replace('-', ' ')}{inputs.proposedUse && <> · <span>{proposedUseDefinition?.label ?? inputs.proposedUse}</span></>}</dd></div><div><dt>Road frontage</dt><dd>{inputs.roadFrontage}</dd></div><div><dt>Utilities nearby</dt><dd>{inputs.utilitiesNearby}</dd></div><div><dt>Data confidence</dt><dd>{analysis.confidence}%</dd></div>
           </dl>
           <div className="report-notes"><div><strong>Zoning notes</strong><p>{inputs.zoningNotes || 'Zoning not verified.'}</p></div><div><strong>Personal notes</strong><p>{inputs.notes || 'No personal notes entered.'}</p></div></div>
         </section>
