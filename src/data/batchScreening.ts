@@ -154,3 +154,76 @@ export async function screenBatch(
   return results
 }
 
+// ---------- Re-screening saved sites ----------
+
+export interface RescreenResult {
+  id: string
+  site?: SavedSite
+  error?: string
+}
+
+// Re-run the full screening pipeline for a saved site, keeping the user's
+// inputs, id, and creation date but refreshing every source and the analysis.
+// Used to bring sites scored on an older scale up to the current one.
+export async function rescreenSavedSite(saved: SavedSite, signal?: AbortSignal): Promise<SavedSite> {
+  const coordinates = saved.coordinates
+  const [parcel, official, hazards] = await Promise.all([
+    fetchParcelAt(coordinates, saved.stateCode, signal),
+    fetchOfficialSiteData(coordinates, signal, undefined, saved.stateCode),
+    fetchRegionalHazards(coordinates, signal),
+  ])
+  let overlays = parcel.status === 'found' && parcel.boundary
+    ? await fetchParcelOverlays(parcel.boundary, signal, undefined, saved.stateCode, coordinates)
+    : null
+  const jurisdiction = official.zoning?.available ? official.zoning.value?.profile : undefined
+  if (overlays && parcel.status === 'found' && parcel.boundary) {
+    overlays = recomputeSetbackAndNetDevelopable(overlays, parcel.boundary, saved.inputs.intendedUse, coordinates, jurisdictionSetbackStandards(jurisdiction))
+  }
+  const analysis = analyzeSite(coordinates, saved.inputs, official, parcel.status === 'found', overlays, hazards, parcel)
+  return {
+    ...saved,
+    analysis,
+    screeningArea: parcel.status === 'found' && parcel.boundary
+      ? { kind: 'parcel', provider: parcel.provenance?.source, boundary: parcel.boundary }
+      : saved.screeningArea,
+    parcel: parcel.status === 'found' && parcel.id
+      ? { id: parcel.id, acres: parcel.acres, acreageKind: parcel.acreageKind, facts: parcel.facts, provenance: parcel.provenance }
+      : saved.parcel,
+    authority: official.authority.available ? official.authority.value : saved.authority,
+    jurisdiction: jurisdiction ?? saved.jurisdiction,
+    buildableEnvelope: overlays?.buildableEnvelope.available && overlays.buildableEnvelope.value
+      ? { ...overlays.buildableEnvelope.value, provenance: overlays.buildableEnvelope.provenance }
+      : saved.buildableEnvelope,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+export async function rescreenSites(
+  sitesToRescreen: SavedSite[],
+  onProgress?: (completed: number, total: number) => void,
+  signal?: AbortSignal,
+  concurrency = 2,
+): Promise<RescreenResult[]> {
+  const results = new Array<RescreenResult>(sitesToRescreen.length)
+  let nextIndex = 0
+  let completed = 0
+  const worker = async () => {
+    while (nextIndex < sitesToRescreen.length) {
+      const index = nextIndex
+      nextIndex += 1
+      const saved = sitesToRescreen[index]
+      try {
+        results[index] = { id: saved.id, site: await rescreenSavedSite(saved, signal) }
+      } catch (error) {
+        if (signal?.aborted) throw error
+        results[index] = { id: saved.id, error: error instanceof Error ? error.message : String(error) }
+      }
+      completed += 1
+      onProgress?.(completed, sitesToRescreen.length)
+    }
+  }
+  const workerCount = Math.max(1, Math.min(Math.floor(concurrency), sitesToRescreen.length))
+  await Promise.all(Array.from({ length: workerCount }, () => worker()))
+  return results
+}
+

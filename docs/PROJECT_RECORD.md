@@ -23,7 +23,9 @@ The first working version must let a user:
 9. Compare saved sites.
 10. View and print a simple site report.
 
-The score uses an agreed **hybrid gate + weighted score** model. First, hard gates screen for conditions serious enough to send the parcel straight to manual diligence. Then a 13-category weighted score ranks the survivors.
+The score uses an agreed **hybrid gate + weighted score** model. First, hard gates screen for conditions serious enough to send the parcel straight to manual diligence. Then a 14-category weighted score ranks the survivors.
+
+**Score calibration (2026-07-11):** 50 is an average parcel, not a passing grade. 0–25 is a verified hard problem; 25–45 a meaningful constraint; ~50 average; 55–60 a clean point screen; 62–70 a clean parcel-wide verified screen; 75+ requires affirmative verified strength (by-right use in the permitted-use table, sourced water + sewer, net/gross ≥ 90%, strong market). One-sided risk screens (flood, wetlands, contamination, species, easements, hazards) top out in the 60s by design — the absence of a problem is the norm, not excellence.
 
 ### Hard gates (any one → "Manual diligence required" verdict, no numeric rank)
 
@@ -39,33 +41,36 @@ The score uses an agreed **hybrid gate + weighted score** model. First, hard gat
 
 | Category | Weight | Source status |
 | --- | ---: | --- |
-| Zoning & entitlement fit | 12 | User-supplied notes + City of Austin official zoning atlas where covered |
-| Net developable acreage & yield | 9 | Parcel-wide constraint overlays when parcel geometry is available; user gross acres otherwise |
-| FEMA floodplain & floodway | 10 | FEMA NFHL (live) |
-| Wetlands, waters & buffers | 10 | FWS NWI (live) |
-| Slope, relief & pad area | 8 | USGS 3DEP / EPQS (live) |
-| Utilities availability & capacity | 10 | EPA SDWIS water service areas (live), Austin Energy service area where covered, + user-supplied |
-| Access, frontage & roadway context | 7 | Census TIGERweb (live) + user frontage |
-| Soils & geotech suitability | 8 | USDA NRCS SSURGO / Soil Data Access (live, point-based) |
-| Stormwater & outfall feasibility | 7 | USGS 3DEP drainage proxy (live, 8-direction elevation analysis) |
-| Easements, encumbrances & ROW | 5 | Local GIS adapter framework (registry-based; ALTA/title when no adapter) |
+| Zoning & entitlement fit | 13 | User-supplied notes + City of Austin official zoning atlas where covered |
+| Net developable acreage & yield | 13 | Parcel-wide constraint overlays when parcel geometry is available; user gross acres otherwise (capped below the affirmative range) |
+| FEMA floodplain & floodway | 8 | FEMA NFHL (live) |
+| Wetlands, waters & buffers | 7 | FWS NWI (live) |
+| Slope, relief & pad area | 6 | USGS 3DEP / EPQS (live) |
+| Utilities availability & capacity | 11 | EPA SDWIS water service areas (live), Austin Energy service area where covered, + user-supplied |
+| Access, frontage & roadway context | 8 | Census TIGERweb (live) + user frontage |
+| Soils & geotech suitability | 6 | USDA NRCS SSURGO / Soil Data Access (live, point-based) |
+| Stormwater & outfall feasibility | 6 | USGS 3DEP drainage proxy (live, 8-direction elevation analysis) |
+| Easements, encumbrances & ROW | 4 | Local GIS adapter framework (registry-based; ALTA/title when no adapter) |
 | Environmental contamination | 5 | EPA Facility Registry Service (live, 1 km buffer) |
 | Species, critical habitat & historic | 4 | USFWS ECOS Critical Habitat (live, point intersection) |
 | Market support & absorption | 5 | Census ACS 5-year population trend + Census BPS building permits (live with API key) |
+| Regional hazards (wildfire, SLR, radon) | 4 | NOAA SLR inundation + USFS Wildfire Hazard Potential + EPA radon zones (live; formerly a −5 modifier) |
+
+Net developable acreage owns the *quantity* question (how much usable land survives the constraint union); the individual flood/wetland/slope/soils/easement categories carry reduced weights and act as *severity* signals, which limits double counting between them.
 
 ### Modifiers
 
-- **Regional hazard modifier:** 0 to −5 from NOAA sea-level rise (−3 for inundation hit), USFS wildfire hazard potential (0 to −4 by WHP class), and EPA radon zones (−2 for Zone 1). Total clamped to [−5, 0]. May be unavailable due to CORS limitations.
-- **Confidence penalty:** 0 to −10 scaled by the number of categories with no source at all. With all 13 categories wired (easements may still be unavailable when no local adapter is registered), the penalty is typically 0–3.
+- **Regional hazards** are now a weighted category (above), not a score modifier. Clean screen ≈ 62; worst combined exposure ≈ 12.
+- **Confidence penalty:** 0 to −10 scaled by the total category *weight* with no source at all (≈1 point per 5 unscored weight points), so a missing high-weight category costs more than a missing low-weight one.
 
-### Verdict bands
+### Verdict bands (recentered 2026-07-11)
 
 | Score | Verdict |
 | --- | --- |
-| 85–100 | Strong shortlist candidate |
-| 70–84 | Viable — needs targeted diligence |
-| 50–69 | Challenged — only if pricing/assemblage is exceptional |
-| Below 50 | Low priority / likely reject |
+| 75–100 | Strong shortlist candidate |
+| 50–74 | Viable — needs targeted diligence |
+| 38–49 | Challenged — only if pricing/assemblage is exceptional |
+| Below 38 | Low priority / likely reject |
 | Any hard gate triggered | Manual diligence required |
 | Less than 50% weighted evidence | Not enough verified data; no numeric score |
 
@@ -199,6 +204,24 @@ The official-data provider, scoring layer, and parcel-provider interface are sep
 13. ~~Normalize and persist development-relevant assessor parcel attributes.~~ **Done: rich facts from FL/CT/MT/NY and all eight Texas county parcel sources, dedicated explorer/report surfaces, privacy filtering, scoring use for parcel zoning/utilities/frontage, unit contracts, live schema checks, and E2E persistence coverage.**
 
 ## Change log
+
+### 2026-07-12 — "Field office" visual redesign; scoring version + re-screening; score levers
+
+- **Complete frontend restyle** (`index.html`, `src/index.css`, `src/App.css`): dark topographic shell (deep green-black surfaces) with a survey-lime accent, Fraunces display serif for headings and score numerals, JetBrains Mono for coordinates and data values, and a subtle contour-line SVG texture on hero/empty/report backgrounds. The map stays light (the artifact you study); the report stays a white paper sheet (the deliverable you print) — all `.report-sheet` content is scoped to paper tokens so print output is unchanged. All existing class names and layout geometry were preserved; only the visual system changed. Verified in-browser at desktop and mobile widths: explorer, site-inputs form, portfolio table, and report.
+- **`SCORING_VERSION` (currently 2) stamps every analysis.** Saved sites whose `analysis.scoringVersion` differs show an "old scale" badge in the portfolio view plus a banner with a one-click "Re-screen N outdated" action. `rescreenSavedSite`/`rescreenSites` in `batchScreening.ts` re-run the full pipeline (parcel, official sources, overlays, hazards) keeping the user's inputs, id, and creation date.
+- **"What could raise this score" panel** in the ScorePanel: `buildScoreImprovements` in `scoring.ts` ranks the highest-leverage diligence actions — verifying unscored categories (weighted-evidence gain + confidence-penalty recovery), upgrading point screens to parcel-wide overlays, and replacing user-supplied answers with official evidence — each with an honest "up to +N" bound and a footnote that adverse findings lower the score instead.
+- The score hero now states the scale plainly: 50 is an average parcel; 75+ is exceptional, verified land.
+
+### 2026-07-11 — Score recalibration: 50 = average, weighted-average bug fix, hazards category
+
+- **Fixed a raw-score normalization bug that pinned every score at ~100.** `analyzeSite` divided the Σ(score×weight) sum by `scoredWeight / 100` (100× too small a divisor), so `clamp()` saturated every raw score at 100 whenever ≥50 weighted evidence existed. Final scores were effectively `100 − hazard modifier − confidence penalty`, which is why every parcel landed in the 90s regardless of its metrics. The divisor is now `scoredWeight`.
+- **Recentered every category curve so 50 is an average parcel.** Clean point screens now score 55–60 and clean parcel-wide verified screens 62–70 (previously 85–95 for the mere absence of a problem); constraints score 25–45; verified hard problems stay 0–25. Scores of 75+ require affirmative verified strength: by-right use in a jurisdiction permitted-use table (90), sourced EPA water + sewer boundaries (82), net-to-gross ≥ 90% (92), road at the parcel edge with assessor frontage (85), strong population + permit trend (≈90). One-sided risk screens intentionally top out in the 60s.
+- **Promoted regional hazards (NOAA SLR, USFS wildfire, EPA radon) from a −5 score modifier to a 14th weighted category** (weight 4; clean ≈ 62, worst combined exposure ≈ 12). `SiteAnalysis.regionalHazardModifier` was removed; ScorePanel and SiteReport now describe hazards as scored evidence.
+- **Rebalanced weights to reduce double counting with net developable acreage.** Net developable (the constraint-union quantity signal) rose 9→13 and zoning 12→13; the overlapping severity categories shrank: floodplain 10→8, wetlands 10→7, slope 8→6, soils 8→6, stormwater 7→6, easements 5→4; utilities 10→11, access 7→8. Gross-acreage fallback (no overlays) is capped at 72 since it is unverified.
+- **Confidence penalty is now weight-scaled** (≈1 point per 5 unscored weight points, max −10) instead of a flat per-category count.
+- **Verdict bands recentered:** strong ≥75, viable 50–74, challenged 38–49, reject <38. Strength/red-flag trigger thresholds updated to the new scale. Hard gates unchanged.
+- **Calibration fixture suite added** (`scoring.calibration.test.ts`): four synthetic archetypes (prime verified ≈ 76, average ≈ 50, constrained ≈ 38, poor ≈ 23) pin the distribution and ordering so anchor drift fails tests.
+- **Tests:** 200 passing (was 196); scoring, storage, and calibration suites updated to the 14-category shape and new anchors.
 
 ### 2026-07-11 — Nationwide product roadmap phases 1–6 complete
 

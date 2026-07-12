@@ -24,7 +24,7 @@ function makeLegacySite(): SavedSite {
     // Legacy 6-category analysis shape
     analysis: {
       finalScore: 72, scoredWeight: 100, verdict: 'Interesting', verdictTone: 'interesting',
-      confidence: 60, confidenceLabel: 'Moderate', confidencePenalty: 0, regionalHazardModifier: 0,
+      confidence: 60, confidenceLabel: 'Moderate', confidencePenalty: 0,
       hardGates: [], gatedToManual: false,
       metrics: {
         flood: { category: 'flood', label: 'Flood', score: 80, weight: 20, summary: '', detail: '', displayValue: 'X', status: 'official' },
@@ -59,7 +59,7 @@ describe('storage', () => {
       inputs: { name: 'Test', acres: '10', location: 'TX', estimatedPrice: '', intendedUse: 'residential', proposedUse: 'single_family', roadFrontage: 'yes', utilitiesNearby: 'yes', zoningNotes: 'by-right', notes: '' },
       analysis: {
         finalScore: 90, rawScore: 90, scoredWeight: 100, verdict: 'Strong', verdictTone: 'strong',
-        confidence: 80, confidenceLabel: 'High', confidencePenalty: 0, regionalHazardModifier: 0,
+        confidence: 80, confidenceLabel: 'High', confidencePenalty: 0,
         hardGates: [], gatedToManual: false,
         metrics: {} as never,
         strengths: [], redFlags: [], unknowns: [], nextSteps: [],
@@ -86,7 +86,7 @@ describe('storage', () => {
     expect(loaded[0].inputs.proposedUse).toBe('single_family')
   })
 
-  it('migrates legacy v1 sites to the new 13-category shape', () => {
+  it('migrates legacy v1 sites to the new 14-category shape', () => {
     const legacy = makeLegacySite()
     localStorage.setItem(STORAGE_KEY_V1, JSON.stringify([legacy]))
 
@@ -94,9 +94,9 @@ describe('storage', () => {
     expect(loaded).toHaveLength(1)
     const site = loaded[0]
 
-    // Should have the new 13 categories, not the old 6
+    // Should have the new 14 categories, not the old 6
     const metricKeys = Object.keys(site.analysis.metrics)
-    expect(metricKeys).toHaveLength(13)
+    expect(metricKeys).toHaveLength(14)
     expect(metricKeys).toContain('floodplain')
     expect(metricKeys).toContain('wetlands')
     expect(metricKeys).toContain('zoning')

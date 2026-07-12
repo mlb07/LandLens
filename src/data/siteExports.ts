@@ -1,6 +1,6 @@
 import type { SavedSite, ScoreCategory } from '../types/site'
 
-const METRIC_COLUMNS: ScoreCategory[] = ['zoning', 'netDevelopable', 'floodplain', 'wetlands', 'slope', 'utilities', 'access', 'soils', 'stormwater', 'easements', 'contamination', 'species', 'market']
+const METRIC_COLUMNS: ScoreCategory[] = ['zoning', 'netDevelopable', 'floodplain', 'wetlands', 'slope', 'utilities', 'access', 'soils', 'stormwater', 'easements', 'contamination', 'species', 'market', 'hazards']
 
 function csvCell(value: unknown): string {
   const text = value === null || value === undefined ? '' : String(value)

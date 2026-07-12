@@ -13,8 +13,8 @@ import { fetchRegionalHazards, type RegionalHazardData } from './data/regionalHa
 import { registerDefaultLocalAdapters } from './data/localAdapters'
 import { getStateDefinition, stateDefinitions } from './data/states'
 import { getCoverageTelemetry } from './data/coverageProvider'
-import { screenBatch, type BatchScreeningResult, type BatchScreeningRow } from './data/batchScreening'
-import { analyzeSite } from './lib/scoring'
+import { rescreenSites, screenBatch, type BatchScreeningResult, type BatchScreeningRow } from './data/batchScreening'
+import { analyzeSite, SCORING_VERSION } from './lib/scoring'
 import { loadSites, saveSites } from './lib/storage'
 import { EMPTY_SITE_INPUTS, type BuildableEnvelopeSnapshot, type Coordinates, type ParcelSelection, type ParcelSnapshot, type SavedSite, type SiteAnalysis, type SiteInputs } from './types/site'
 import './App.css'
@@ -410,12 +410,25 @@ function App() {
     return results
   }
 
+  async function rescreenOutdated(onProgress: (completed: number, total: number) => void): Promise<{ updated: number; failed: number }> {
+    const outdated = sites.filter((site) => site.analysis.scoringVersion !== SCORING_VERSION)
+    if (!outdated.length) return { updated: 0, failed: 0 }
+    const results = await rescreenSites(outdated, onProgress)
+    const updatedById: Record<string, SavedSite> = {}
+    for (const result of results) if (result.site) updatedById[result.id] = result.site
+    const updated = Object.keys(updatedById).length
+    if (updated) persistSites(sites.map((site) => updatedById[site.id] ?? site))
+    const failed = results.length - updated
+    notify(`${updated} site${updated === 1 ? '' : 's'} re-screened on the current scale${failed ? ` · ${failed} failed` : ''}`)
+    return { updated, failed }
+  }
+
   function navigate(next: View) {
     setView(next)
     setMobileMenu(false)
   }
 
-  if (view === 'saved') return <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}><Suspense fallback={<div className="lazy-loading">Loading…</div>}><SavedSites sites={sites} onOpen={openSite} onReport={showReport} onDelete={deleteSite} onExplore={() => navigate('explorer')} onImportBatch={importBatch} /></Suspense>{toast && <Toast message={toast} />}</AppFrame>
+  if (view === 'saved') return <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}><Suspense fallback={<div className="lazy-loading">Loading…</div>}><SavedSites sites={sites} onOpen={openSite} onReport={showReport} onDelete={deleteSite} onExplore={() => navigate('explorer')} onImportBatch={importBatch} onRescreenOutdated={rescreenOutdated} /></Suspense>{toast && <Toast message={toast} />}</AppFrame>
   if (view === 'report' && reportSite) return <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}><Suspense fallback={<div className="lazy-loading">Loading…</div>}><SiteReport site={reportSite} onBack={() => navigate(reportReturnView)} /></Suspense></AppFrame>
 
   return (

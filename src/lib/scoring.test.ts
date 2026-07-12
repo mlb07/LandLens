@@ -35,13 +35,13 @@ const fullOfficial: OfficialSiteData = {
 }
 
 describe('scoring weights', () => {
-  it('all 13 category weights sum to 100', () => {
+  it('all 14 category weights sum to 100', () => {
     const total = Object.values(CATEGORY_WEIGHTS).reduce((a, b) => a + b, 0)
     expect(total).toBe(100)
   })
 
-  it('has exactly 13 categories', () => {
-    expect(Object.keys(CATEGORY_WEIGHTS)).toHaveLength(13)
+  it('has exactly 14 categories', () => {
+    expect(Object.keys(CATEGORY_WEIGHTS)).toHaveLength(14)
   })
 })
 
@@ -52,16 +52,20 @@ describe('analyzeSite — basic scenarios', () => {
     expect(result.verdict).toBe('Not enough verified data')
   })
 
-  it('returns a score with full official data and good inputs', () => {
+  it('returns a mid-to-upper score with full official point data and good inputs', () => {
+    // Good point-level evidence + user-reported by-right zoning lands in the
+    // "viable" band on the recentered scale — "strong" is reserved for
+    // parcel-wide verified evidence with affirmative strengths.
     const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial)
     expect(result.finalScore).not.toBeNull()
-    expect(result.finalScore!).toBeGreaterThan(80)
-    expect(result.verdict).toContain('Strong')
+    expect(result.finalScore!).toBeGreaterThanOrEqual(60)
+    expect(result.finalScore!).toBeLessThanOrEqual(75)
+    expect(result.verdict).toContain('Viable')
   })
 
-  it('produces exactly 13 metrics', () => {
+  it('produces exactly 14 metrics', () => {
     const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial)
-    expect(Object.keys(result.metrics)).toHaveLength(13)
+    expect(Object.keys(result.metrics)).toHaveLength(14)
   })
 })
 
@@ -125,7 +129,7 @@ describe('analyzeSite — zoning regex', () => {
     }
     const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: '', intendedUse: 'residential' }, official)
     expect(result.metrics.zoning.status).toBe('official')
-    expect(result.metrics.zoning.score).toBe(70)
+    expect(result.metrics.zoning.score).toBe(62)
     expect(result.metrics.zoning.detail).toContain('Austin/Travis development profile')
     expect(result.redFlags.some((flag) => flag.includes('mapped zoning overlay'))).toBe(true)
     expect(result.unknowns).not.toContain('Zoning and future land use have not been verified.')
@@ -138,7 +142,7 @@ describe('analyzeSite — zoning regex', () => {
       zoning: { available: true, value: { zoningCode: 'SF-3', baseDistrict: 'SF-3', jurisdiction: 'FULL PURPOSE', profile }, provenance: { source: 'City of Austin', sourceUrl: 'x' } },
     }
     const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: '', intendedUse: 'industrial' }, official)
-    expect(result.metrics.zoning.score).toBe(28)
+    expect(result.metrics.zoning.score).toBe(22)
     expect(result.redFlags.some((flag) => flag.includes('likely conflict'))).toBe(true)
     expect(result.hardGates.find((gate) => gate.id === 'use-permitted')?.triggered).toBe(false)
   })
@@ -150,7 +154,7 @@ describe('analyzeSite — zoning regex', () => {
       zoning: { available: true, value: { zoningCode: 'SF-3-NP', baseDistrict: 'SF-3', jurisdiction: 'FULL PURPOSE', profile }, provenance: { source: 'City of Austin', sourceUrl: 'x' } },
     }
     const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: '', proposedUse: 'single_family' }, official)
-    expect(result.metrics.zoning.score).toBe(74)
+    expect(result.metrics.zoning.score).toBe(72)
     expect(result.metrics.zoning.summary).toContain('listed as permitted')
     expect(result.strengths.some((strength) => strength.includes('base-use table'))).toBe(true)
   })
@@ -162,7 +166,7 @@ describe('analyzeSite — zoning regex', () => {
       zoning: { available: true, value: { zoningCode: 'SF-3-NP', baseDistrict: 'SF-3', jurisdiction: 'FULL PURPOSE', profile }, provenance: { source: 'City of Austin', sourceUrl: 'x' } },
     }
     const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: '', proposedUse: 'multifamily' }, official)
-    expect(result.metrics.zoning.score).toBe(12)
+    expect(result.metrics.zoning.score).toBe(10)
     expect(result.hardGates.find((gate) => gate.id === 'use-permitted')?.triggered).toBe(true)
     expect(result.redFlags.some((flag) => flag.includes('not permitted'))).toBe(true)
   })
@@ -174,7 +178,7 @@ describe('analyzeSite — zoning regex', () => {
       zoning: { available: true, value: { zoningCode: 'SF-3-MU-CO-NP', baseDistrict: 'SF-3', jurisdiction: 'FULL PURPOSE', profile }, provenance: { source: 'City of Austin', sourceUrl: 'x' } },
     }
     const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: '', intendedUse: 'commercial', proposedUse: 'restaurant_general' }, official)
-    expect(result.metrics.zoning.score).toBe(44)
+    expect(result.metrics.zoning.score).toBe(40)
     expect(result.hardGates.find((gate) => gate.id === 'use-permitted')?.triggered).toBe(false)
     expect(result.redFlags.some((flag) => flag.includes('combining-district review'))).toBe(true)
   })
@@ -191,17 +195,17 @@ describe('analyzeSite — zoning regex', () => {
 
   it('detects "by-right" as strong', () => {
     const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: 'by-right permitted' }, fullOfficial)
-    expect(result.metrics.zoning.score).toBeGreaterThanOrEqual(80)
+    expect(result.metrics.zoning.score).toBeGreaterThanOrEqual(70)
   })
 
   it('detects "conditional" as moderate', () => {
     const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: 'conditional use permit' }, fullOfficial)
-    expect(result.metrics.zoning.score).toBe(50)
+    expect(result.metrics.zoning.score).toBe(42)
   })
 
   it('detects "rezoning" as conditional', () => {
     const result = analyzeSite(COORDS, { ...GOOD_INPUTS, zoningNotes: 'rezoning needed' }, fullOfficial)
-    expect(result.metrics.zoning.score).toBe(50)
+    expect(result.metrics.zoning.score).toBe(42)
   })
 })
 
@@ -401,7 +405,7 @@ describe('analyzeSite — official parcel facts', () => {
   it('does not penalize an unfamiliar local zoning code as incompatible', () => {
     const localCodeParcel = { ...parcel, facts: { ...parcel.facts, zoning: 'R-40' } }
     const result = analyzeSite(COORDS, { ...EMPTY_SITE_INPUTS, intendedUse: 'commercial' }, unavailableOfficial, true, null, null, localCodeParcel)
-    expect(result.metrics.zoning.score).toBe(58)
+    expect(result.metrics.zoning.score).toBe(48)
     expect(result.metrics.zoning.summary).toContain('does not interpret automatically')
   })
 
@@ -415,7 +419,7 @@ describe('analyzeSite — official parcel facts', () => {
   it('treats a partially unavailable parcel utility record as partial evidence', () => {
     const partialParcel = { ...parcel, facts: { waterService: 'City Water', sewerService: 'None' } }
     const result = analyzeSite(COORDS, EMPTY_SITE_INPUTS, unavailableOfficial, true, null, null, partialParcel)
-    expect(result.metrics.utilities.score).toBe(55)
+    expect(result.metrics.utilities.score).toBe(45)
     expect(result.metrics.utilities.summary).toContain('partial utility-service path')
   })
 
@@ -432,8 +436,8 @@ describe('analyzeSite — official parcel facts', () => {
   })
 })
 
-describe('analyzeSite — regional hazard modifier', () => {
-  it('applies no penalty when hazards are clear', () => {
+describe('analyzeSite — regional hazards category', () => {
+  it('scores just above average when hazards are clear', () => {
     const clearHazards: RegionalHazardData = {
       hazards: [
         { type: 'seaLevelRise', available: true, level: 'none', penalty: 0, summary: '', detail: '', provenance: { source: 'NOAA', sourceUrl: 'x' } },
@@ -443,10 +447,12 @@ describe('analyzeSite — regional hazard modifier', () => {
       totalPenalty: 0, available: true, fetchedAt: new Date().toISOString(),
     }
     const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, false, null, clearHazards)
-    expect(result.regionalHazardModifier).toBe(0)
+    expect(result.metrics.hazards.status).toBe('official')
+    expect(result.metrics.hazards.score).toBe(62)
+    expect(result.metrics.hazards.displayValue).toBe('No elevated regional hazard')
   })
 
-  it('applies -3 for sea-level rise inundation', () => {
+  it('drops the hazards category for sea-level rise inundation', () => {
     const slrHazards: RegionalHazardData = {
       hazards: [
         { type: 'seaLevelRise', available: true, level: 'severe', penalty: -3, summary: '', detail: '', provenance: { source: 'NOAA', sourceUrl: 'x' } },
@@ -455,12 +461,16 @@ describe('analyzeSite — regional hazard modifier', () => {
       ],
       totalPenalty: -3, available: true, fetchedAt: new Date().toISOString(),
     }
+    const clear = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, false, null, null)
     const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, false, null, slrHazards)
-    expect(result.regionalHazardModifier).toBe(-3)
-    expect(result.finalScore).toBeLessThan(result.rawScore!)
+    expect(result.metrics.hazards.score).toBe(32)
+    expect(result.metrics.hazards.displayValue).toContain('sea-level rise')
+    expect(result.redFlags.some((flag) => flag.includes('sea-level rise'))).toBe(true)
+    // The hazards category is scored evidence, so the raw score reflects it.
+    expect(result.rawScore!).toBeLessThanOrEqual(clear.rawScore!)
   })
 
-  it('clamps combined hazards to -5', () => {
+  it('scores worst combined exposure near the bottom of the band', () => {
     const allHazards: RegionalHazardData = {
       hazards: [
         { type: 'seaLevelRise', available: true, level: 'severe', penalty: -3, summary: '', detail: '', provenance: { source: 'NOAA', sourceUrl: 'x' } },
@@ -470,14 +480,20 @@ describe('analyzeSite — regional hazard modifier', () => {
       totalPenalty: -5, available: true, fetchedAt: new Date().toISOString(),
     }
     const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, false, null, allHazards)
-    expect(result.regionalHazardModifier).toBe(-5)
+    expect(result.metrics.hazards.score).toBe(12)
+  })
+
+  it('leaves the hazards category unscored when no source responds', () => {
+    const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial, false, null, null)
+    expect(result.metrics.hazards.status).toBe('unknown')
+    expect(result.metrics.hazards.score).toBeNull()
   })
 })
 
 describe('analyzeSite — verdict bands', () => {
-  it('returns "Strong shortlist candidate" for 85+', () => {
+  it('returns the viable band for good point-level evidence', () => {
     const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial)
-    expect(result.verdictTone).toBe('strong')
+    expect(result.verdictTone).toBe('interesting')
   })
 
   it('returns "Manual diligence required" for any gate', () => {

@@ -5,7 +5,7 @@ const STORAGE_KEY = 'landlens.saved-sites.v2'
 const LEGACY_KEY = 'landlens.saved-sites.v1'
 
 // Detect the old 6-category analysis shape so legacy saved sites can be
-// migrated to the new 13-category shape without losing user-entered inputs.
+// migrated to the new 14-category shape without losing user-entered inputs.
 function isLegacyAnalysis(analysis: SavedSite['analysis']): boolean {
   if (!analysis || typeof analysis !== 'object') return true
   const metrics = analysis.metrics as Record<string, unknown> | undefined

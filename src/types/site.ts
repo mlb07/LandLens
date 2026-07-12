@@ -22,24 +22,25 @@ export interface SiteInputs {
   notes: string
 }
 
-// Thirteen weighted core categories (weights sum to 100). Order matches the
+// Fourteen weighted core categories (weights sum to 100). Order matches the
 // project scoring framework. Unimplemented categories are shown as
 // unavailable or user-supplied and excluded from the weighted calc until a
 // real source is wired — never fabricated.
 export type ScoreCategory =
-  | 'zoning'          // 12  zoning & entitlement fit
-  | 'netDevelopable'  //  9  net developable acreage & theoretical yield
-  | 'floodplain'      // 10  FEMA floodplain & floodway
-  | 'wetlands'        // 10  NWI wetlands, waters & buffers
-  | 'slope'           //  8  USGS slope, relief & buildable pad area
-  | 'utilities'       // 10  utility availability & likely capacity
-  | 'access'          //  7  access, frontage & roadway context
-  | 'soils'           //  8  NRCS soils & geotechnical suitability
-  | 'stormwater'      //  7  stormwater & outfall feasibility
-  | 'easements'       //  5  easements, encumbrances & ROW dedication risk
+  | 'zoning'          // 13  zoning & entitlement fit
+  | 'netDevelopable'  // 13  net developable acreage & theoretical yield
+  | 'floodplain'      //  8  FEMA floodplain & floodway
+  | 'wetlands'        //  7  NWI wetlands, waters & buffers
+  | 'slope'           //  6  USGS slope, relief & buildable pad area
+  | 'utilities'       // 11  utility availability & likely capacity
+  | 'access'          //  8  access, frontage & roadway context
+  | 'soils'           //  6  NRCS soils & geotechnical suitability
+  | 'stormwater'      //  6  stormwater & outfall feasibility
+  | 'easements'       //  4  easements, encumbrances & ROW dedication risk
   | 'contamination'   //  5  environmental contamination & prior use
   | 'species'         //  4  species, critical habitat & historic/cultural
   | 'market'          //  5  market support & absorption context
+  | 'hazards'         //  4  regional hazards (wildfire, sea-level rise, radon)
 
 export interface DataProvenance {
   source: string
@@ -82,6 +83,9 @@ export interface HardGate {
 }
 
 export interface SiteAnalysis {
+  // Version of the scoring scale that produced this analysis. Saved sites
+  // with an older (or missing) version show as outdated until re-screened.
+  scoringVersion?: number
   finalScore: number | null
   rawScore: number | null
   scoredWeight: number
@@ -90,7 +94,6 @@ export interface SiteAnalysis {
   confidence: number
   confidenceLabel: string
   confidencePenalty: number
-  regionalHazardModifier: number
   hardGates: HardGate[]
   gatedToManual: boolean
   metrics: Record<ScoreCategory, MetricResult>

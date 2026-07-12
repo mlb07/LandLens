@@ -1,6 +1,7 @@
-import { AlertOctagon, AlertTriangle, CheckCircle2, CircleHelp, Database, ExternalLink, LoaderCircle, MapPinned, Sparkles, Slash, Waves, Flame, Atom } from 'lucide-react'
+import { AlertOctagon, AlertTriangle, CheckCircle2, CircleHelp, Database, ExternalLink, LoaderCircle, MapPinned, Sparkles, Slash, TrendingUp, Waves, Flame, Atom } from 'lucide-react'
 import type { RegionalHazardData } from '../data/regionalHazardProvider'
 import type { DataStatus, SiteAnalysis } from '../types/site'
+import { buildScoreImprovements } from '../lib/scoring'
 
 function StatusBadge({ status }: { status: DataStatus }) {
   const label = status === 'official' ? 'Official source' : status === 'mock' ? 'Legacy mock' : status === 'user' ? 'User supplied' : 'Unavailable'
@@ -25,6 +26,7 @@ export function ScorePanel({ analysis, dirty, loading, pendingSources = 0, fetch
   const hasScore = analysis.finalScore !== null
   const hasParcelOverlays = analysis.metrics.floodplain.detail.includes('grid points') || analysis.metrics.netDevelopable.status === 'official'
   const usesLocalSetbacks = analysis.metrics.netDevelopable.detail.includes('mapped jurisdiction base-district distances')
+  const improvements = hasScore ? buildScoreImprovements(analysis, hasParcelOverlays) : []
   return (
     <div className="score-panel">
       {pendingSources > 0 && <div className="analysis-updating"><LoaderCircle className="spin" size={14} /> Score ready · {pendingSources} {pendingSources === 1 ? 'source is' : 'sources are'} still updating</div>}
@@ -37,7 +39,7 @@ export function ScorePanel({ analysis, dirty, loading, pendingSources = 0, fetch
         <div className="score-hero-copy">
           <span className="eyebrow">Development feasibility</span>
           <h2>{analysis.verdict}</h2>
-          <p>A preliminary signal for deciding whether this site deserves deeper research.</p>
+          <p>A preliminary signal for deciding whether this site deserves deeper research. On this scale 50 is an average parcel — 75+ is exceptional, verified land.</p>
         </div>
       </section>
 
@@ -60,20 +62,20 @@ export function ScorePanel({ analysis, dirty, loading, pendingSources = 0, fetch
         {fetchedAt && <small>Official sources checked {new Date(fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.</small>}
       </section>
 
-      {hasScore && (analysis.regionalHazardModifier !== 0 || analysis.confidencePenalty !== 0 || hazards?.available) && (
+      {hasScore && (analysis.confidencePenalty !== 0 || hazards?.available) && (
         <section className="modifier-card">
           {hazards?.available && hazards.hazards.map((hazard) => (
             <div className="modifier-row" key={hazard.type}>
               {HAZARD_ICONS[hazard.type] || <Slash size={14} />}
               <span>{HAZARD_LABELS[hazard.type] || hazard.type}</span>
-              <strong className={hazard.penalty < 0 ? 'penalty-active' : ''}>{hazard.available ? (hazard.penalty < 0 ? String(hazard.penalty) : '0') : 'n/a'}</strong>
+              <strong className={hazard.penalty < 0 ? 'penalty-active' : ''}>{hazard.available ? (hazard.penalty < 0 ? hazard.level : 'clear') : 'n/a'}</strong>
             </div>
           ))}
           {!hazards?.available && (
-            <div className="modifier-row"><Slash size={14} /><span>Regional hazard modifier</span><strong>{analysis.regionalHazardModifier === 0 ? 'Not wired' : String(analysis.regionalHazardModifier)}</strong></div>
+            <div className="modifier-row"><Slash size={14} /><span>Regional hazards (weighted category)</span><strong>Unavailable</strong></div>
           )}
           <div className="modifier-row"><Database size={14} /><span>Confidence penalty (missing official data)</span><strong>−{analysis.confidencePenalty}</strong></div>
-          <p>Raw weighted score {analysis.rawScore ?? '—'} → adjusted {analysis.finalScore}. Regional modifier total: {analysis.regionalHazardModifier}.</p>
+          <p>Raw weighted score {analysis.rawScore ?? '—'} → adjusted {analysis.finalScore}. Regional hazards contribute through the weighted hazards category, not a separate modifier.</p>
         </section>
       )}
 
@@ -97,6 +99,23 @@ export function ScorePanel({ analysis, dirty, loading, pendingSources = 0, fetch
           </article>
         ))}
       </div>
+
+      {improvements.length > 0 && (
+        <section className="improvements-card">
+          <div className="section-heading">
+            <div><span className="eyebrow">Highest-leverage diligence</span><h3>What could raise this score</h3></div>
+          </div>
+          <ul className="improvements-list">
+            {improvements.map((item) => (
+              <li key={item.id}>
+                <div className="improvement-gain"><TrendingUp size={14} /> up to +{item.potentialGain}</div>
+                <div><strong>{item.action}</strong><p>{item.detail}</p></div>
+              </li>
+            ))}
+          </ul>
+          <p className="improvements-footnote">Gains assume the verified evidence comes back clean or strong. Adverse findings lower the score instead — knowing that before spending diligence money is the point.</p>
+        </section>
+      )}
 
       <div className="insight-grid">
         <InsightCard icon={<CheckCircle2 />} title="Strengths" tone="positive" items={analysis.strengths} />

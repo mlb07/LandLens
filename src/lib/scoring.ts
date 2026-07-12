@@ -4,21 +4,40 @@ import type { RegionalHazardData } from '../data/regionalHazardProvider'
 import type { Coordinates, HardGate, IntendedUse, MetricResult, NationalContextFinding, ParcelSelection, ScoreCategory, SiteAnalysis, SiteInputs, VerdictTone } from '../types/site'
 import { assessJurisdictionProposedUse } from '../data/jurisdictions/registry'
 
+// Bumped whenever the scoring scale, weights, or category curves change in a
+// way that makes previously saved scores incomparable. Saved sites carrying an
+// older (or missing) version are flagged as outdated in the portfolio view.
+export const SCORING_VERSION = 2
+
 // Core weighted categories — weights sum to 100. See docs/PROJECT_RECORD.md.
+//
+// Score calibration: 50 is an average parcel, not a passing grade.
+//   0–25   verified hard problem (floodway, prohibited use, severe soils)
+//  25–45   meaningful constraint (partial SFHA, conditional use, moderate soils)
+//  ~50     average / neutral
+//  55–60   clean point screen — limited evidence that nothing is wrong
+//  62–70   clean parcel-wide verified screen
+//  75–100  affirmative verified strength (by-right use in the permitted-use
+//          table, sourced water + sewer, net/gross ≥ 90%, strong market)
+// One-sided risk screens (flood, wetlands, contamination, species, easements,
+// hazards) top out in the 60s by design — the absence of a problem is the
+// norm, not excellence. Only categories with genuine upside (zoning fit, net
+// developable, utilities, access, slope, market) can reach the 80s and 90s.
 export const CATEGORY_WEIGHTS: Record<ScoreCategory, number> = {
-  zoning: 12,
-  netDevelopable: 9,
-  floodplain: 10,
-  wetlands: 10,
-  slope: 8,
-  utilities: 10,
-  access: 7,
-  soils: 8,
-  stormwater: 7,
-  easements: 5,
+  zoning: 13,
+  netDevelopable: 13,
+  floodplain: 8,
+  wetlands: 7,
+  slope: 6,
+  utilities: 11,
+  access: 8,
+  soils: 6,
+  stormwater: 6,
+  easements: 4,
   contamination: 5,
   species: 4,
   market: 5,
+  hazards: 4,
 }
 
 export const CATEGORY_LABELS: Record<ScoreCategory, string> = {
@@ -35,6 +54,7 @@ export const CATEGORY_LABELS: Record<ScoreCategory, string> = {
   contamination: 'Environmental contamination',
   species: 'Species & historic constraints',
   market: 'Market support & absorption',
+  hazards: 'Regional hazards (wildfire, SLR, radon)',
 }
 
 // Conservative screening floors for "minimum viable yield" gate by intended
@@ -48,10 +68,12 @@ const MIN_VIABLE_ACRES: Record<IntendedUse, number> = {
   other: 0.15,
 }
 
+// Bands assume the recentered scale where ~50 is an average parcel. A fully
+// verified, affirmatively strong parcel lands in the high 70s; 75+ is rare.
 const VERDICT_BANDS: Array<{ min: number; verdict: string; tone: VerdictTone }> = [
-  { min: 85, verdict: 'Strong shortlist candidate', tone: 'strong' },
-  { min: 70, verdict: 'Viable — needs targeted diligence', tone: 'interesting' },
-  { min: 50, verdict: 'Challenged — only if pricing/assemblage is exceptional', tone: 'research' },
+  { min: 75, verdict: 'Strong shortlist candidate', tone: 'strong' },
+  { min: 50, verdict: 'Viable — needs targeted diligence', tone: 'interesting' },
+  { min: 38, verdict: 'Challenged — only if pricing/assemblage is exceptional', tone: 'research' },
   { min: 0, verdict: 'Low priority / likely reject', tone: 'weak' },
 ]
 
@@ -102,11 +124,11 @@ function zoningMetric(inputs: SiteInputs, official?: OfficialSiteData['zoning'],
       const proposedUse = assessJurisdictionProposedUse(profile, inputs.proposedUse)
       if (proposedUse) {
         const score = proposedUse.status === 'permitted'
-          ? (proposedUse.requiresCombiningDistrictReview || proposedUse.requiresOverlayReview ? 74 : 86)
-          : proposedUse.status === 'conditional' ? 50
-            : proposedUse.status === 'prohibited' ? 12
-              : proposedUse.status === 'special-review' ? 44
-                : 48
+          ? (proposedUse.requiresCombiningDistrictReview || proposedUse.requiresOverlayReview ? 72 : 90)
+          : proposedUse.status === 'conditional' ? 45
+            : proposedUse.status === 'prohibited' ? 10
+              : proposedUse.status === 'special-review' ? 40
+                : 45
         const summary = proposedUse.status === 'permitted'
           ? `${proposedUse.useLabel} is listed as permitted in the ${proposedUse.district} base-district table.`
           : proposedUse.status === 'conditional'
@@ -117,7 +139,7 @@ function zoningMetric(inputs: SiteInputs, official?: OfficialSiteData['zoning'],
                 ? `${proposedUse.useLabel} is controlled by a combining-district, special-district, or footnoted rule.`
                 : `${proposedUse.useLabel} could not be resolved for this jurisdiction.`
         return {
-          category: 'zoning', label: CATEGORY_LABELS.zoning, score: userWarning ? 15 : score, weight: CATEGORY_WEIGHTS.zoning,
+          category: 'zoning', label: CATEGORY_LABELS.zoning, score: userWarning ? 12 : score, weight: CATEGORY_WEIGHTS.zoning,
           status: 'official', provenance,
           displayValue: `${code} · ${proposedUse.useLabel}`,
           summary: userWarning ? 'Your zoning note says the proposed use is likely prohibited.' : summary,
@@ -125,10 +147,10 @@ function zoningMetric(inputs: SiteInputs, official?: OfficialSiteData['zoning'],
         }
       }
       const status = profile.useCompatibility[inputs.intendedUse]
-      const score = status === 'likely-compatible' ? (profile.overlays.length ? 70 : 78)
-        : status === 'conditional-review' ? 52
-          : status === 'likely-incompatible' ? 28
-            : 48
+      const score = status === 'likely-compatible' ? (profile.overlays.length ? 62 : 68)
+        : status === 'conditional-review' ? 45
+          : status === 'likely-incompatible' ? 22
+            : 45
       const statusSummary = status === 'likely-compatible'
         ? `The ${base} district family is a preliminary match for ${inputs.intendedUse.replace('-', ' ')} use.`
         : status === 'conditional-review'
@@ -140,7 +162,7 @@ function zoningMetric(inputs: SiteInputs, official?: OfficialSiteData['zoning'],
         ? ` Principal ${base} dimensional standards are loaded from ${profile.standards.sourceSection}; more restrictive rules still control.`
         : ' No numeric base-standard override is applied for this district.'
       return {
-        category: 'zoning', label: CATEGORY_LABELS.zoning, score: userWarning ? 15 : score, weight: CATEGORY_WEIGHTS.zoning,
+        category: 'zoning', label: CATEGORY_LABELS.zoning, score: userWarning ? 12 : score, weight: CATEGORY_WEIGHTS.zoning,
         status: 'official', provenance,
         displayValue: `${code} · ${profile.jurisdictionLabel}`,
         summary: userWarning ? 'Your zoning note says the intended use is likely prohibited.' : statusSummary,
@@ -157,9 +179,9 @@ function zoningMetric(inputs: SiteInputs, official?: OfficialSiteData['zoning'],
         : inputs.intendedUse === 'mixed-use' ? mixed
           : inputs.intendedUse === 'industrial' ? industrial
             : true
-    const score = !recognizedDistrictFamily ? 58 : likelyCompatible ? 72 : 32
+    const score = !recognizedDistrictFamily ? 48 : likelyCompatible ? 60 : 25
     return {
-      category: 'zoning', label: CATEGORY_LABELS.zoning, score: userWarning ? 15 : score, weight: CATEGORY_WEIGHTS.zoning,
+      category: 'zoning', label: CATEGORY_LABELS.zoning, score: userWarning ? 12 : score, weight: CATEGORY_WEIGHTS.zoning,
       status: 'official', provenance,
       displayValue: `${code} · ${jurisdiction}`,
       summary: userWarning ? 'Your zoning note says the intended use is likely prohibited.' : !recognizedDistrictFamily ? `The mapped ${code} district uses a local code LandLens does not interpret automatically.` : likelyCompatible ? `The mapped ${code} district is a preliminary match for ${inputs.intendedUse.replace('-', ' ')} use.` : `The mapped ${code} district is not an obvious preliminary match for ${inputs.intendedUse.replace('-', ' ')} use.`,
@@ -175,7 +197,7 @@ function zoningMetric(inputs: SiteInputs, official?: OfficialSiteData['zoning'],
   const prohibited = /\b(prohibit\w*|not allow\w*|not permit\w*|no build|restricted use)/i.test(notes)
   const conditional = /\b(conditional|special exception|special use|variance|rezon\w*|comp plan|comprehensive plan)/i.test(notes)
   const byRight = /\b(by[- ]?right|permit\w*|allow\w*|legal use|conforming)/i.test(notes)
-  const score = prohibited ? 15 : conditional ? 50 : byRight ? 88 : 62
+  const score = prohibited ? 12 : conditional ? 42 : byRight ? 75 : 50
   const display = prohibited ? 'Likely prohibited' : conditional ? 'Conditional / rezoning likely' : byRight ? 'By-right (user-reported)' : 'Zoning notes provided'
   return userMetric(
     'zoning', score, display,
@@ -189,7 +211,7 @@ function netDevelopableMetric(inputs: SiteInputs, hasParcelBoundary: boolean, ov
   if (overlays?.netDevelopable) {
     const nd = overlays.netDevelopable
     const ratio = nd.netToGrossRatio
-    const score = ratio >= 0.85 ? 92 : ratio >= 0.70 ? 82 : ratio >= 0.50 ? 62 : ratio >= 0.35 ? 40 : 20
+    const score = ratio >= 0.90 ? 92 : ratio >= 0.85 ? 85 : ratio >= 0.70 ? 70 : ratio >= 0.50 ? 52 : ratio >= 0.35 ? 32 : 15
     const subtractedSoils = nd.soilConstrainedAcres > 0
     const subtractedEasements = nd.easementAcres > 0
     const subtractedSetbacks = nd.setbackAcres > 0
@@ -217,9 +239,11 @@ function netDevelopableMetric(inputs: SiteInputs, hasParcelBoundary: boolean, ov
         : 'Net developable acreage needs the parcel boundary plus parcel-wide overlays. Enter the assessor acreage for a rough placeholder reading.',
     )
   }
-  let score = acres >= 20 ? 92 : acres >= 10 ? 85 : acres >= 5 ? 78 : acres >= 2 ? 68 : acres >= 1 ? 58 : acres >= 0.5 ? 45 : 30
-  if (inputs.intendedUse === 'industrial' && acres < 2) score = Math.min(score, 35)
-  if (inputs.intendedUse === 'commercial' && acres < 0.5) score = Math.min(score, 35)
+  // Gross acreage is a placeholder, not verified net yield — cap it below the
+  // affirmative range reserved for parcel-wide overlay evidence.
+  let score = acres >= 20 ? 72 : acres >= 10 ? 65 : acres >= 5 ? 58 : acres >= 2 ? 50 : acres >= 1 ? 42 : acres >= 0.5 ? 32 : 22
+  if (inputs.intendedUse === 'industrial' && acres < 2) score = Math.min(score, 30)
+  if (inputs.intendedUse === 'commercial' && acres < 0.5) score = Math.min(score, 30)
   return userMetric(
     'netDevelopable', score, `${acres} acres (gross)`,
     'Gross acreage from your input — net developable is lower once floodplain, wetlands, steep slope, hydric/severe soils, and easements are subtracted.',
@@ -231,7 +255,7 @@ function floodplainMetric(data: OfficialSiteData['flood'] | undefined, overlay?:
   // Prefer parcel-wide overlay when available.
   if (overlay?.available && overlay.value) {
     const v = overlay.value
-    const score = v.floodwayFraction > 0 ? 5 : v.sfhaFraction > 0.25 ? 20 : v.sfhaFraction > 0 ? 45 : v.risk === 'Undetermined' ? 50 : 90
+    const score = v.floodwayFraction > 0 ? 5 : v.sfhaFraction > 0.25 ? 18 : v.sfhaFraction > 0 ? 38 : v.risk === 'Undetermined' ? 45 : 68
     const pct = (frac: number) => `${Math.round(frac * 100)}%`
     return {
       category: 'floodplain', label: CATEGORY_LABELS.floodplain, score, weight: CATEGORY_WEIGHTS.floodplain,
@@ -250,7 +274,7 @@ function floodplainMetric(data: OfficialSiteData['flood'] | undefined, overlay?:
     )
   }
   const { risk, zone } = data.value
-  const score = risk === 'Floodway' ? 5 : risk === 'High' ? 25 : risk === 'Moderate' ? 58 : risk === 'Undetermined' ? 45 : 90
+  const score = risk === 'Floodway' ? 5 : risk === 'High' ? 20 : risk === 'Moderate' ? 45 : risk === 'Undetermined' ? 40 : 58
   return {
     category: 'floodplain', label: CATEGORY_LABELS.floodplain, score, weight: CATEGORY_WEIGHTS.floodplain,
     status: 'official', provenance: data.provenance,
@@ -264,7 +288,7 @@ function wetlandsMetric(data: OfficialSiteData['environmental'] | undefined, ove
   // Prefer parcel-wide overlay when available.
   if (overlay?.available && overlay.value) {
     const v = overlay.value
-    const score = v.wetlandFraction > 0.25 ? 15 : v.wetlandFraction > 0.10 ? 40 : v.wetlandFraction > 0 ? 60 : 88
+    const score = v.wetlandFraction > 0.25 ? 12 : v.wetlandFraction > 0.10 ? 32 : v.wetlandFraction > 0 ? 48 : 66
     const pct = `${Math.round(v.wetlandFraction * 100)}%`
     const topTypes = Object.entries(v.wetlandTypeCounts).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([t]) => t).join(', ')
     return {
@@ -285,7 +309,7 @@ function wetlandsMetric(data: OfficialSiteData['environmental'] | undefined, ove
   }
   const hit = data.value.mappedWetland
   return {
-    category: 'wetlands', label: CATEGORY_LABELS.wetlands, score: hit ? 15 : 88, weight: CATEGORY_WEIGHTS.wetlands,
+    category: 'wetlands', label: CATEGORY_LABELS.wetlands, score: hit ? 15 : 56, weight: CATEGORY_WEIGHTS.wetlands,
     status: 'official', provenance: data.provenance,
     displayValue: hit ? (data.value.wetlandType || 'Mapped wetland at point') : 'No NWI wetland at point',
     summary: hit ? 'The selected point intersects a mapped NWI wetland.' : 'The selected point does not intersect an NWI wetland polygon.',
@@ -297,7 +321,7 @@ function slopeMetric(data: OfficialSiteData['slope'] | undefined, overlay?: Parc
   // Prefer parcel-wide overlay when available.
   if (overlay?.available && overlay.value) {
     const v = overlay.value
-    const score = v.meanSlopePercent <= 3 ? 95 : v.meanSlopePercent <= 8 ? 80 : v.meanSlopePercent <= 15 ? 55 : v.meanSlopePercent <= 20 ? 35 : v.meanSlopePercent <= 30 ? 20 : 10
+    const score = v.meanSlopePercent <= 3 ? 82 : v.meanSlopePercent <= 8 ? 68 : v.meanSlopePercent <= 15 ? 48 : v.meanSlopePercent <= 20 ? 30 : v.meanSlopePercent <= 30 ? 15 : 8
     return {
       category: 'slope', label: CATEGORY_LABELS.slope, score, weight: CATEGORY_WEIGHTS.slope,
       status: 'official', provenance: overlay.provenance,
@@ -315,7 +339,7 @@ function slopeMetric(data: OfficialSiteData['slope'] | undefined, overlay?: Parc
     )
   }
   const slope = data.value.slopePercent
-  const score = slope <= 3 ? 95 : slope <= 8 ? 80 : slope <= 15 ? 55 : slope <= 20 ? 35 : slope <= 30 ? 20 : 10
+  const score = slope <= 3 ? 82 : slope <= 8 ? 68 : slope <= 15 ? 48 : slope <= 20 ? 30 : slope <= 30 ? 15 : 8
   return {
     category: 'slope', label: CATEGORY_LABELS.slope, score, weight: CATEGORY_WEIGHTS.slope,
     status: 'official', provenance: data.provenance,
@@ -328,11 +352,14 @@ function slopeMetric(data: OfficialSiteData['slope'] | undefined, overlay?: Parc
 function utilitiesMetric(inputs: SiteInputs, official?: OfficialSiteData['utilityService'], sewer?: OfficialSiteData['sewerService'], local?: OfficialSiteData['localUtility'], parcel?: ParcelSelection): MetricResult {
   if (local?.available && local.value) {
     const v = local.value
-    let score = v.inServiceArea ? 68 : 28
-    if (official?.available && official.value?.inWaterServiceArea) score = Math.max(score, 76)
-    if (sewer?.available && sewer.value?.inMappedSewershed) score = Math.max(score, sewer.value.method === 'sourced' ? 78 : 72)
-    if (inputs.utilitiesNearby === 'yes') score = Math.max(score, 80)
-    if (inputs.utilitiesNearby === 'no') score = Math.min(score, 35)
+    let score = v.inServiceArea ? 62 : 22
+    if (official?.available && official.value?.inWaterServiceArea) score = Math.max(score, 70)
+    if (sewer?.available && sewer.value?.inMappedSewershed) score = Math.max(score, sewer.value.method === 'sourced' ? 74 : 66)
+    // Affirmative strength: local service area corroborated by sourced EPA
+    // water and sourced sewershed boundaries.
+    if (v.inServiceArea && official?.value?.inWaterServiceArea && official.value.boundaryMethod === 'sourced' && sewer?.value?.inMappedSewershed && sewer.value.method === 'sourced') score = Math.max(score, 82)
+    if (inputs.utilitiesNearby === 'yes') score = Math.max(score, 72)
+    if (inputs.utilitiesNearby === 'no') score = Math.min(score, 30)
     return {
       category: 'utilities', label: CATEGORY_LABELS.utilities, score, weight: CATEGORY_WEIGHTS.utilities,
       status: 'official', provenance: local.provenance,
@@ -346,9 +373,9 @@ function utilitiesMetric(inputs: SiteInputs, official?: OfficialSiteData['utilit
     const serviceText = parcelServices.join(' · ')
     const unavailableCount = parcelServices.filter((service) => /\b(none|not available|unknown|no service)\b/i.test(service)).length
     const allUnavailable = unavailableCount === parcelServices.length
-    let score = allUnavailable ? 32 : unavailableCount > 0 ? 55 : 66
-    if (inputs.utilitiesNearby === 'yes') score = Math.max(score, 78)
-    if (inputs.utilitiesNearby === 'no') score = Math.min(score, 35)
+    let score = allUnavailable ? 28 : unavailableCount > 0 ? 45 : 58
+    if (inputs.utilitiesNearby === 'yes') score = Math.max(score, 66)
+    if (inputs.utilitiesNearby === 'no') score = Math.min(score, 30)
     return {
       category: 'utilities', label: CATEGORY_LABELS.utilities, score, weight: CATEGORY_WEIGHTS.utilities,
       status: 'official', provenance: parcel?.provenance,
@@ -364,10 +391,10 @@ function utilitiesMetric(inputs: SiteInputs, official?: OfficialSiteData['utilit
     const sewerMapped = Boolean(sewer?.value?.inMappedSewershed)
     const sourcedWater = waterMapped && v?.boundaryMethod === 'sourced'
     const sourcedSewer = sewerMapped && sewer?.value?.method === 'sourced'
-    let score = waterMapped && sewerMapped ? (sourcedWater && sourcedSewer ? 76 : 68) : waterMapped || sewerMapped ? (sourcedWater || sourcedSewer ? 64 : 56) : 30
+    let score = waterMapped && sewerMapped ? (sourcedWater && sourcedSewer ? 82 : 64) : waterMapped || sewerMapped ? (sourcedWater || sourcedSewer ? 55 : 45) : 25
     // Adjust based on user input if they also answered.
-    if (inputs.utilitiesNearby === 'yes') score = Math.max(score, 75)
-    if (inputs.utilitiesNearby === 'no') score = Math.min(score, 35)
+    if (inputs.utilitiesNearby === 'yes') score = Math.max(score, 68)
+    if (inputs.utilitiesNearby === 'no') score = Math.min(score, 30)
     return {
       category: 'utilities', label: CATEGORY_LABELS.utilities, score, weight: CATEGORY_WEIGHTS.utilities,
       status: 'official', provenance: waterMapped ? official?.provenance : sewer?.provenance,
@@ -383,7 +410,7 @@ function utilitiesMetric(inputs: SiteInputs, official?: OfficialSiteData['utilit
       'Utility availability and capacity need local utility service maps or EPA public water service areas, plus a will-serve / capacity letter. Select yes/no or leave unknown.',
     )
   }
-  const score = inputs.utilitiesNearby === 'yes' ? 80 : 25
+  const score = inputs.utilitiesNearby === 'yes' ? 62 : 20
   return userMetric(
     'utilities', score, `Utilities: ${inputs.utilitiesNearby}`,
     inputs.utilitiesNearby === 'yes'
@@ -399,7 +426,7 @@ function accessMetric(data: OfficialSiteData['road'] | undefined, inputs: SiteIn
     if (inputs.roadFrontage === 'unknown') {
       if (mappedFrontage) {
         return {
-          category: 'access', label: CATEGORY_LABELS.access, score: 72, weight: CATEGORY_WEIGHTS.access,
+          category: 'access', label: CATEGORY_LABELS.access, score: 64, weight: CATEGORY_WEIGHTS.access,
           status: 'official', provenance: parcel?.provenance, displayValue: `${mappedFrontage.toLocaleString()} ft reported frontage`,
           summary: 'The parcel record reports frontage, but legal and usable access remain unverified.',
           detail: 'Assessor frontage is a dimensional attribute, not proof of deeded access, a public-road connection, driveway approval, or adequate roadway capacity. Confirm title, plat, road authority, and access permits.',
@@ -412,15 +439,17 @@ function accessMetric(data: OfficialSiteData['road'] | undefined, inputs: SiteIn
       )
     }
     return userMetric(
-      'access', inputs.roadFrontage === 'yes' ? 78 : 22, `Frontage: ${inputs.roadFrontage}`,
+      'access', inputs.roadFrontage === 'yes' ? 62 : 20, `Frontage: ${inputs.roadFrontage}`,
       inputs.roadFrontage === 'yes' ? 'You indicated road frontage. Legal access is still unverified.' : 'You indicated no road frontage — a hard access constraint.',
       'Frontage in GIS is not legal, deeded access. Title, plats, and the road authority are binding.',
     )
   }
   const distance = data.value.nearestDistanceMeters
-  let score = distance <= 25 ? 92 : distance <= 75 ? 80 : distance <= 150 ? 65 : distance <= 300 ? 48 : 30
-  if (mappedFrontage) score = Math.max(score, 80)
-  if (inputs.roadFrontage === 'yes') score = Math.max(score, 82)
+  let score = distance <= 25 ? 78 : distance <= 75 ? 66 : distance <= 150 ? 52 : distance <= 300 ? 40 : 25
+  if (mappedFrontage) score = Math.max(score, 70)
+  // Affirmative strength: mapped road at the parcel edge AND assessor frontage.
+  if (distance <= 25 && mappedFrontage) score = Math.max(score, 85)
+  if (inputs.roadFrontage === 'yes') score = Math.max(score, 70)
   if (inputs.roadFrontage === 'no') score = Math.min(score, 22)
   return {
     category: 'access', label: CATEGORY_LABELS.access, score, weight: CATEGORY_WEIGHTS.access,
@@ -457,23 +486,23 @@ function marketMetric(inputs: SiteInputs, demographics?: OfficialSiteData['demog
   const popWeightWhenBoth = 1 - bpsWeightWhenBoth
 
   // Combine population growth and building permits for a composite market score.
-  let popScore = 65 // neutral default when only BPS is available
+  let popScore = 50 // neutral default when only BPS is available
   let demoDisplay = ''
   if (hasDemo) {
     const growth = demographics!.value!.growthPercent
-    popScore = growth >= 10 ? 90 : growth >= 5 ? 80 : growth >= 0 ? 65 : growth >= -5 ? 45 : 25
+    popScore = growth >= 10 ? 90 : growth >= 5 ? 75 : growth >= 0 ? 55 : growth >= -5 ? 35 : 18
     demoDisplay = `pop ${growth > 0 ? '+' : ''}${growth.toFixed(1)}%`
   }
 
-  let bpsScore = 65 // neutral default when only demographics is available
+  let bpsScore = 50 // neutral default when only demographics is available
   let bpsDisplay = ''
   if (hasBps) {
     const trend = bps!.value!.permitTrend
     // For non-residential / non-mixed uses the permit signal is informative but
     // indirect — cap its upside so a hot residential market doesn't pin the
-    // commercial/industrial market sub-score at 90.
-    const cap = bpsIsDirectSignal ? 100 : intendedUse === 'other' ? 100 : 78
-    bpsScore = Math.min(cap, trend >= 20 ? 90 : trend >= 5 ? 78 : trend >= 0 ? 65 : trend >= -10 ? 45 : 25)
+    // commercial/industrial market sub-score at 88.
+    const cap = bpsIsDirectSignal ? 100 : intendedUse === 'other' ? 100 : 68
+    bpsScore = Math.min(cap, trend >= 20 ? 88 : trend >= 5 ? 72 : trend >= 0 ? 55 : trend >= -10 ? 35 : 18)
     bpsDisplay = `permits ${trend > 0 ? '+' : ''}${trend.toFixed(1)}%`
   }
 
@@ -507,7 +536,7 @@ function stormwaterMetric(data?: OfficialSiteData['stormwater'], overlay?: Storm
   // Prefer parcel-wide overlay when available.
   if (overlay?.available && overlay.value) {
     const v = overlay.value
-    const score = v.screeningLevel === 'good' ? 85 : v.screeningLevel === 'moderate' ? 62 : v.screeningLevel === 'challenging' ? 35 : 50
+    const score = v.screeningLevel === 'good' ? 70 : v.screeningLevel === 'moderate' ? 50 : v.screeningLevel === 'challenging' ? 28 : 45
     return {
       category: 'stormwater', label: CATEGORY_LABELS.stormwater, score, weight: CATEGORY_WEIGHTS.stormwater,
       status: 'official', provenance: overlay.provenance,
@@ -526,7 +555,7 @@ function stormwaterMetric(data?: OfficialSiteData['stormwater'], overlay?: Storm
     )
   }
   const v = data.value
-  const score = v.screeningLevel === 'good' ? 85 : v.screeningLevel === 'moderate' ? 62 : v.screeningLevel === 'challenging' ? 35 : 50
+  const score = v.screeningLevel === 'good' ? 62 : v.screeningLevel === 'moderate' ? 46 : v.screeningLevel === 'challenging' ? 26 : 42
   return {
     category: 'stormwater', label: CATEGORY_LABELS.stormwater, score, weight: CATEGORY_WEIGHTS.stormwater,
     status: 'official', provenance: data.provenance,
@@ -542,7 +571,7 @@ function easementsMetric(data?: OfficialSiteData['easements'], overlay?: Easemen
   // Prefer parcel-wide overlay when available.
   if (overlay?.available && overlay.value) {
     const v = overlay.value
-    const score = v.easementFraction > 0.02 ? 40 : v.easementTypes.length > 0 && v.easementTypes[0] !== 'none flag' ? 55 : 78
+    const score = v.easementFraction > 0.02 ? 30 : v.easementTypes.length > 0 && v.easementTypes[0] !== 'none flag' ? 45 : 64
     return {
       category: 'easements', label: CATEGORY_LABELS.easements, score, weight: CATEGORY_WEIGHTS.easements,
       status: 'official', provenance: overlay.provenance,
@@ -561,7 +590,7 @@ function easementsMetric(data?: OfficialSiteData['easements'], overlay?: Easemen
     )
   }
   const v = data.value
-  const score = v.hasRecordedEasements ? 35 : 75
+  const score = v.hasRecordedEasements ? 30 : 56
   return {
     category: 'easements', label: CATEGORY_LABELS.easements, score, weight: CATEGORY_WEIGHTS.easements,
     status: 'official', provenance: data.provenance,
@@ -581,13 +610,13 @@ function soilsMetric(data?: OfficialSiteData['soils'], overlay?: SoilsOverlay): 
     const moderate = v.dominantRating === 'moderate'
     // Weight the score by the share of the parcel that is unfavorable:
     // severeFraction is the most damaging, then moderateFraction.
-    const score = severe && v.severeFraction > 0.25 ? 18
-      : severe ? 35
-        : moderate && v.moderateFraction > 0.25 ? 45
-          : moderate ? 58
-            : v.dominantRating === 'slight' ? 85
-              : v.dominantRating === 'unknown' ? 60
-                : 60
+    const score = severe && v.severeFraction > 0.25 ? 12
+      : severe ? 28
+        : moderate && v.moderateFraction > 0.25 ? 38
+          : moderate ? 48
+            : v.dominantRating === 'slight' ? 70
+              : v.dominantRating === 'unknown' ? 50
+                : 50
     const topSoils = Object.entries(v.soilTypeCounts).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, share]) => `${name} (${Math.round((share || 0) * 100)}%)`).join('; ')
     return {
       category: 'soils', label: CATEGORY_LABELS.soils, score, weight: CATEGORY_WEIGHTS.soils,
@@ -609,7 +638,7 @@ function soilsMetric(data?: OfficialSiteData['soils'], overlay?: SoilsOverlay): 
   const v = data.value
   const severe = v.dominantRating === 'severe'
   const moderate = v.dominantRating === 'moderate'
-  const score = severe ? 20 : moderate ? 50 : v.dominantRating === 'slight' ? 85 : 60
+  const score = severe ? 15 : moderate ? 45 : v.dominantRating === 'slight' ? 62 : 50
   return {
     category: 'soils', label: CATEGORY_LABELS.soils, score, weight: CATEGORY_WEIGHTS.soils,
     status: 'official', provenance: data.provenance,
@@ -627,14 +656,14 @@ function contaminationMetric(data?: OfficialSiteData['contamination'], overlay?:
     const v = overlay.value
     if (v.facilityCount === 0) {
       return {
-        category: 'contamination', label: CATEGORY_LABELS.contamination, score: 88, weight: CATEGORY_WEIGHTS.contamination,
+        category: 'contamination', label: CATEGORY_LABELS.contamination, score: 66, weight: CATEGORY_WEIGHTS.contamination,
         status: 'official', provenance: overlay.provenance,
         displayValue: 'No EPA facilities on parcel',
         summary: 'No EPA-regulated facilities were found within the parcel polygon (or its surrounding buffer).',
         detail: `Parcel-wide EPA FRS overlay across ${v.samplePoints} grid points with a ${v.bufferMeters} m buffer around the parcel polygon. EPA FRS covers facilities in programs like RCRA, CERCLA, TRI, NPDES, and UST. National databases miss some local/historic conditions. A Phase I ESA is still required.`,
       }
     }
-    const score = v.hasMajorFlag ? 25 : v.facilityCount > 5 ? 50 : v.facilityCount > 1 ? 65 : 72
+    const score = v.hasMajorFlag ? 18 : v.facilityCount > 5 ? 38 : v.facilityCount > 1 ? 48 : 52
     return {
       category: 'contamination', label: CATEGORY_LABELS.contamination, score, weight: CATEGORY_WEIGHTS.contamination,
       status: 'official', provenance: overlay.provenance,
@@ -655,14 +684,14 @@ function contaminationMetric(data?: OfficialSiteData['contamination'], overlay?:
   const v = data.value
   if (v.facilityCount === 0) {
     return {
-      category: 'contamination', label: CATEGORY_LABELS.contamination, score: 88, weight: CATEGORY_WEIGHTS.contamination,
+      category: 'contamination', label: CATEGORY_LABELS.contamination, score: 58, weight: CATEGORY_WEIGHTS.contamination,
       status: 'official', provenance: data.provenance,
       displayValue: 'No EPA facilities within 1 km (point)',
       summary: 'No EPA-regulated facilities were found within 1,000 meters of the selected point.',
       detail: 'EPA FRS covers facilities in programs like RCRA, CERCLA, TRI, NPDES, and UST. National databases miss some local/historic conditions. A Phase I ESA is still required.',
     }
   }
-  const score = v.hasMajorFlag ? 25 : v.facilityCount > 5 ? 50 : v.facilityCount > 1 ? 65 : 72
+  const score = v.hasMajorFlag ? 18 : v.facilityCount > 5 ? 38 : v.facilityCount > 1 ? 48 : 52
   return {
     category: 'contamination', label: CATEGORY_LABELS.contamination, score, weight: CATEGORY_WEIGHTS.contamination,
     status: 'official', provenance: data.provenance,
@@ -680,7 +709,7 @@ function speciesMetric(data?: OfficialSiteData['species'], overlay?: SpeciesOver
     const v = overlay.value
     if (!v.criticalHabitatHit) {
       return {
-        category: 'species', label: CATEGORY_LABELS.species, score: 85, weight: CATEGORY_WEIGHTS.species,
+        category: 'species', label: CATEGORY_LABELS.species, score: 66, weight: CATEGORY_WEIGHTS.species,
         status: 'official', provenance: overlay.provenance,
         displayValue: 'No critical habitat on parcel',
         summary: 'No USFWS critical habitat polygon intersects the parcel boundary.',
@@ -688,7 +717,7 @@ function speciesMetric(data?: OfficialSiteData['species'], overlay?: SpeciesOver
       }
     }
     return {
-      category: 'species', label: CATEGORY_LABELS.species, score: 20, weight: CATEGORY_WEIGHTS.species,
+      category: 'species', label: CATEGORY_LABELS.species, score: 12, weight: CATEGORY_WEIGHTS.species,
       status: 'official', provenance: overlay.provenance,
       displayValue: `${v.speciesCount} critical habitat hit${v.speciesCount === 1 ? '' : 's'} · ${Math.round(v.habitatFraction * 100)}% of parcel`,
       summary: `The parcel intersects critical habitat for ${v.criticalHabitatLayers.slice(0, 2).join(', ')}. ${Math.round(v.habitatFraction * 100)}% of the ${v.samplePoints} sampled grid points fall within mapped habitat.`,
@@ -707,7 +736,7 @@ function speciesMetric(data?: OfficialSiteData['species'], overlay?: SpeciesOver
   const v = data.value
   if (!v.criticalHabitatHit) {
     return {
-      category: 'species', label: CATEGORY_LABELS.species, score: 85, weight: CATEGORY_WEIGHTS.species,
+      category: 'species', label: CATEGORY_LABELS.species, score: 56, weight: CATEGORY_WEIGHTS.species,
       status: 'official', provenance: data.provenance,
       displayValue: 'No critical habitat at point (point)',
       summary: 'No USFWS critical habitat polygon intersects the selected point.',
@@ -715,11 +744,47 @@ function speciesMetric(data?: OfficialSiteData['species'], overlay?: SpeciesOver
     }
   }
   return {
-    category: 'species', label: CATEGORY_LABELS.species, score: 20, weight: CATEGORY_WEIGHTS.species,
+    category: 'species', label: CATEGORY_LABELS.species, score: 12, weight: CATEGORY_WEIGHTS.species,
     status: 'official', provenance: data.provenance,
     displayValue: `${v.speciesCount} critical habitat hit${v.speciesCount === 1 ? '' : 's'} (point)`,
     summary: `The selected point intersects critical habitat for ${v.criticalHabitatLayers.slice(0, 2).join(', ')}.`,
     detail: `Critical habitat layers: ${v.criticalHabitatLayers.join(', ')}. IPaC’s standard resource list is informational and not official consultation correspondence. A formal IPaC project review and agency consultation are required when a federal nexus exists.`,
+  }
+}
+
+// ---------- Regional hazards metric (NOAA SLR / USFS wildfire / EPA radon) ----------
+
+const HAZARD_TYPE_LABELS: Record<string, string> = {
+  seaLevelRise: 'sea-level rise',
+  wildfire: 'wildfire',
+  radon: 'radon',
+}
+
+function hazardsMetric(hazards?: RegionalHazardData | null): MetricResult {
+  if (!hazards?.available) {
+    return missingMetric(
+      'hazards',
+      'Regional hazard exposure (NOAA sea-level rise, USFS wildfire hazard potential, EPA radon zones) could not be screened. This may be a CORS limitation of the browser-based services.',
+    )
+  }
+  // totalPenalty is 0 to -5; map it onto the recentered scale where a clean
+  // screen sits just above average and the worst combined exposure is severe.
+  const score = clamp(62 + hazards.totalPenalty * 10)
+  const active = hazards.hazards.filter((hazard) => hazard.available && hazard.penalty < 0)
+  const activeLabels = active.map((hazard) => `${HAZARD_TYPE_LABELS[hazard.type] ?? hazard.type} (${hazard.level})`)
+  const unavailableCount = hazards.hazards.filter((hazard) => !hazard.available).length
+  return {
+    category: 'hazards', label: CATEGORY_LABELS.hazards, score, weight: CATEGORY_WEIGHTS.hazards,
+    status: 'official', provenance: {
+      source: 'NOAA SLR · USFS Wildfire Hazard Potential · EPA Radon Zones',
+      sourceUrl: 'https://coast.noaa.gov/slr/',
+      coverageNote: 'Screening-level regional hazard exposure, not a site-specific assessment.',
+    },
+    displayValue: active.length ? activeLabels.join(' · ') : 'No elevated regional hazard',
+    summary: active.length
+      ? `Elevated regional hazard exposure: ${activeLabels.join(', ')}.`
+      : 'No elevated sea-level rise, wildfire, or radon exposure was screened at this point.',
+    detail: `NOAA 1.5 ft sea-level rise inundation, USFS wildfire hazard potential, and EPA county radon zones are screening-level signals${unavailableCount ? ` (${unavailableCount} of 3 sources unavailable)` : ''}. They do not replace site-specific flood, defensible-space, insurance, or radon assessments.`,
   }
 }
 
@@ -818,7 +883,7 @@ function evaluateHardGates(metrics: Record<ScoreCategory, MetricResult>, inputs:
 function getVerdict(rawScore: number | null, scoredWeight: number, gatedToManual: boolean, evidenceCoverage: 'partial' | 'full'): Pick<SiteAnalysis, 'verdict' | 'verdictTone'> {
   if (gatedToManual) return { verdict: 'Manual diligence required', verdictTone: 'manual' }
   if (rawScore === null) return { verdict: 'Not enough verified data', verdictTone: 'research' }
-  if (scoredWeight < 75 && rawScore >= 70 && evidenceCoverage === 'partial') {
+  if (scoredWeight < 75 && rawScore >= 60 && evidenceCoverage === 'partial') {
     return { verdict: 'Promising, limited evidence', verdictTone: 'research' }
   }
   const band = VERDICT_BANDS.find((entry) => rawScore >= entry.min)
@@ -893,6 +958,7 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
     contamination: contaminationMetric(official?.contamination, overlays?.contamination),
     species: speciesMetric(official?.species, overlays?.species),
     market: marketMetric(inputs, official?.demographics, official?.bps),
+    hazards: hazardsMetric(hazards),
   }
   const exactJurisdictionUse = official?.zoning?.value?.profile
     ? assessJurisdictionProposedUse(official.zoning.value.profile, inputs.proposedUse)
@@ -908,25 +974,24 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
   const evidenceCoverage: 'partial' | 'full' = scoredWeight >= 75 ? 'full' : 'partial'
 
   // Weighted raw score over scored categories only, normalized to 100.
+  // (Σ score×weight ÷ Σ weight — dividing by scoredWeight/100 inflated the
+  // result 100× and clamp() pinned every raw score at 100.)
   const rawScore: number | null = scoredWeight >= 50
-    ? clamp(scoredMetrics.reduce((total, metric) => total + metric.score * metric.weight, 0) / (scoredWeight / 100))
+    ? clamp(scoredMetrics.reduce((total, metric) => total + metric.score * metric.weight, 0) / scoredWeight)
     : null
 
-  // Regional hazard modifier: 0 to -5 from sea-level rise, wildfire, and radon.
-  // Only applies when at least one hazard source returned data. Clamped to [-5, 0].
-  const regionalHazardModifier = hazards?.available ? hazards.totalPenalty : 0
-
-  // Confidence penalty: 0 to -10 scaled by categories with no source at all.
+  // Confidence penalty: 0 to -10 scaled by the total category weight that has
+  // no source at all, so a missing high-weight category costs more than a
+  // missing low-weight one.
   const unknownCount = Object.values(metrics).filter((metric) => metric.status === 'unknown').length
-  const confidencePenalty = Math.min(10, Math.round(unknownCount * 1.5))
+  const confidencePenalty = Math.min(10, Math.round((100 - scoredWeight) / 5))
 
-  // Final score applies modifiers + penalty to the raw score, but only when
+  // Final score applies the confidence penalty to the raw score, but only when
   // there is enough weighted evidence. A gated site keeps its computed score
   // for transparency but the verdict is "Manual diligence required".
   let finalScore: number | null = null
   if (rawScore !== null) {
-    const adjusted = rawScore + regionalHazardModifier - confidencePenalty
-    finalScore = clamp(adjusted)
+    finalScore = clamp(rawScore - confidencePenalty)
   }
 
   // Confidence: separate from the score, reflects how much is verified.
@@ -945,20 +1010,20 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
     redFlags.push(`Hard gate: ${gate.label}. ${gate.reason}`)
   }
 
-  if (metrics.floodplain.status === 'official' && metrics.floodplain.score !== null && metrics.floodplain.score >= 75) strengths.push(hasOverlays ? 'No FEMA flood hazard intersects the parcel boundary.' : 'The selected point is outside FEMA\'s mapped elevated-hazard zones.')
-  if (metrics.wetlands.status === 'official' && metrics.wetlands.score !== null && metrics.wetlands.score >= 75) strengths.push(hasOverlays ? 'No NWI wetlands intersect the parcel boundary.' : 'No NWI wetland intersects the selected point.')
-  if (metrics.slope.status === 'official' && metrics.slope.score !== null && metrics.slope.score >= 75) strengths.push(hasOverlays ? 'USGS parcel-wide terrain samples indicate favorable slopes.' : 'USGS samples indicate favorable local terrain.')
-  if (metrics.access.status !== 'unknown' && metrics.access.score !== null && metrics.access.score >= 75) strengths.push('A mapped road is close to the selected point.')
-  if (metrics.market.status === 'official' && metrics.market.score !== null && metrics.market.score >= 75) strengths.push('ACS tract population change is supportive.')
-  if (metrics.utilities.status === 'user' && metrics.utilities.score !== null && metrics.utilities.score >= 70) strengths.push('You indicated utilities are nearby.')
-  if (metrics.zoning.status === 'user' && metrics.zoning.score !== null && metrics.zoning.score >= 80) strengths.push('Your zoning notes indicate a by-right permitted use.')
+  if (metrics.floodplain.status === 'official' && metrics.floodplain.score !== null && metrics.floodplain.score >= 55) strengths.push(hasOverlays ? 'No FEMA flood hazard intersects the parcel boundary.' : 'The selected point is outside FEMA\'s mapped elevated-hazard zones.')
+  if (metrics.wetlands.status === 'official' && metrics.wetlands.score !== null && metrics.wetlands.score >= 55) strengths.push(hasOverlays ? 'No NWI wetlands intersect the parcel boundary.' : 'No NWI wetland intersects the selected point.')
+  if (metrics.slope.status === 'official' && metrics.slope.score !== null && metrics.slope.score >= 65) strengths.push(hasOverlays ? 'USGS parcel-wide terrain samples indicate favorable slopes.' : 'USGS samples indicate favorable local terrain.')
+  if (metrics.access.status !== 'unknown' && metrics.access.score !== null && metrics.access.score >= 65) strengths.push('A mapped road is close to the selected point.')
+  if (metrics.market.status === 'official' && metrics.market.score !== null && metrics.market.score >= 70) strengths.push('ACS tract population change is supportive.')
+  if (metrics.utilities.status === 'user' && metrics.utilities.score !== null && metrics.utilities.score >= 60) strengths.push('You indicated utilities are nearby.')
+  if (metrics.zoning.status === 'user' && metrics.zoning.score !== null && metrics.zoning.score >= 70) strengths.push('Your zoning notes indicate a by-right permitted use.')
   if (!inputs.proposedUse && official?.zoning?.value?.profile?.useCompatibility[inputs.intendedUse] === 'likely-compatible') strengths.push(`The mapped ${official.zoning.value.profile.baseDistrict} district family is a preliminary match for the intended use.`)
   if (exactJurisdictionUse?.status === 'permitted') strengths.push(`${exactJurisdictionUse.useLabel} is listed as permitted in the mapped ${exactJurisdictionUse.district} base-use table.`)
-  if (metrics.netDevelopable.status === 'official' && metrics.netDevelopable.score !== null && metrics.netDevelopable.score >= 75) strengths.push(`Net developable acreage is strong at ${overlays?.netDevelopable?.netDevelopableAcres} ac (${Math.round((overlays?.netDevelopable?.netToGrossRatio ?? 0) * 100)}% of gross).`)
-  else if (metrics.netDevelopable.status === 'user' && metrics.netDevelopable.score !== null && metrics.netDevelopable.score >= 75) strengths.push('Reported gross acreage is ample for the intended use.')
-  if (metrics.soils.status === 'official' && metrics.soils.score !== null && metrics.soils.score >= 75) strengths.push('NRCS soil ratings are favorable for building and septic.')
-  if (metrics.contamination.status === 'official' && metrics.contamination.score !== null && metrics.contamination.score >= 75) strengths.push('No EPA-regulated facilities within 1,000 meters.')
-  if (metrics.species.status === 'official' && metrics.species.score !== null && metrics.species.score >= 75) strengths.push('No USFWS critical habitat intersects the selected point.')
+  if (metrics.netDevelopable.status === 'official' && metrics.netDevelopable.score !== null && metrics.netDevelopable.score >= 70) strengths.push(`Net developable acreage is strong at ${overlays?.netDevelopable?.netDevelopableAcres} ac (${Math.round((overlays?.netDevelopable?.netToGrossRatio ?? 0) * 100)}% of gross).`)
+  else if (metrics.netDevelopable.status === 'user' && metrics.netDevelopable.score !== null && metrics.netDevelopable.score >= 60) strengths.push('Reported gross acreage is ample for the intended use.')
+  if (metrics.soils.status === 'official' && metrics.soils.score !== null && metrics.soils.score >= 60) strengths.push('NRCS soil ratings are favorable for building and septic.')
+  if (metrics.contamination.status === 'official' && metrics.contamination.score !== null && metrics.contamination.score >= 55) strengths.push('No EPA-regulated facilities within 1,000 meters.')
+  if (metrics.species.status === 'official' && metrics.species.score !== null && metrics.species.score >= 55) strengths.push('No USFWS critical habitat intersects the selected point.')
   if (official?.protectedLands?.available && official.protectedLands.value && !official.protectedLands.value.intersects) strengths.push('No PAD-US protected-area interest intersects the selected point.')
 
   if (overlays?.floodplain.value?.sfhaFraction ?? official?.flood.value?.sfha) {
@@ -969,7 +1034,7 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
     const pct = overlays?.wetlands.value ? ` ${Math.round(overlays.wetlands.value.wetlandFraction * 100)}%` : ''
     redFlags.push(`The parcel${hasOverlays ? ` (${pct})` : ' / selected point'} intersects NWI wetlands.`)
   }
-  if (metrics.slope.status === 'official' && metrics.slope.score !== null && metrics.slope.score < 50) redFlags.push(hasOverlays ? 'USGS parcel-wide terrain indicates potentially costly slope.' : 'USGS terrain samples indicate potentially costly slope.')
+  if (metrics.slope.status === 'official' && metrics.slope.score !== null && metrics.slope.score < 40) redFlags.push(hasOverlays ? 'USGS parcel-wide terrain indicates potentially costly slope.' : 'USGS terrain samples indicate potentially costly slope.')
   if (metrics.access.score !== null && metrics.access.score < 50) redFlags.push('Mapped-road proximity or stated frontage is weak.')
   if (metrics.utilities.status === 'user' && metrics.utilities.score !== null && metrics.utilities.score < 40) redFlags.push('You indicated utilities are not nearby.')
   if (metrics.zoning.status === 'user' && metrics.zoning.score !== null && metrics.zoning.score < 30) redFlags.push('Your zoning notes indicate the use may be prohibited or requires rezoning.')
@@ -980,9 +1045,9 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
   if (official?.zoning?.value?.profile?.overlays.length) redFlags.push(`${official.zoning.value.profile.overlays.length} mapped zoning overlay${official.zoning.value.profile.overlays.length === 1 ? '' : 's'} may supersede the base-district screen.`)
   if (Number(inputs.acres) > 0 && Number(inputs.acres) < 1 && inputs.intendedUse !== 'residential') redFlags.push('Reported acreage may be too small for the intended non-residential use.')
   if (metrics.market.status === 'official' && metrics.market.score !== null && metrics.market.score < 50) redFlags.push('ACS tract population change is weak.')
-  if (metrics.soils.status === 'official' && metrics.soils.score !== null && metrics.soils.score < 40) redFlags.push('NRCS soils ratings are severe for septic/dwelling — geotechnical review and perc testing are critical.')
+  if (metrics.soils.status === 'official' && metrics.soils.score !== null && metrics.soils.score < 35) redFlags.push('NRCS soils ratings are severe for septic/dwelling — geotechnical review and perc testing are critical.')
   if (overlays?.soils.value && overlays.soils.value.severeFraction > 0.30) redFlags.push(`${Math.round(overlays.soils.value.severeFraction * 100)}% of the parcel has severe NRCS soil ratings — significant subtraction from net developable acreage.`)
-  if (metrics.contamination.status === 'official' && metrics.contamination.score !== null && metrics.contamination.score < 40) redFlags.push('EPA-regulated facilities with major hazardous/toxic flags are within 1,000 meters.')
+  if (metrics.contamination.status === 'official' && metrics.contamination.score !== null && metrics.contamination.score < 30) redFlags.push('EPA-regulated facilities with major hazardous/toxic flags are within 1,000 meters.')
   if (metrics.species.status === 'official' && metrics.species.score !== null && metrics.species.score < 40) redFlags.push('The selected point intersects USFWS critical habitat — agency consultation is required.')
   if (official?.protectedLands?.available && official.protectedLands.value?.intersects) {
     const pad = official.protectedLands.value
@@ -1018,17 +1083,16 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
     : hasParcelBoundary
       ? 'A parcel boundary is loaded, but flood, wetland, slope, soils, and easement metrics still describe the selected point — not the entire parcel.'
       : 'This is a point screen; parcel boundaries, ownership, easements, and net buildable acreage are not loaded.')
-  if (regionalHazardModifier === 0 && !hazards?.available) unknowns.push('Regional hazard modifier (sea-level rise, wildfire, radon) could not be screened from NOAA, USFS, or EPA. This may be a CORS limitation.')
-  else if (regionalHazardModifier === 0 && hazards?.available) unknowns.push('Regional hazard sources returned data but no hazard penalty was applied.')
-  else if (regionalHazardModifier < 0) {
-    const activeHazards = hazards!.hazards.filter((h) => h.available && h.penalty < 0).map((h) => h.type === 'seaLevelRise' ? 'sea-level rise' : h.type === 'wildfire' ? 'wildfire' : 'radon')
-    unknowns.push(`Regional hazard modifier ${regionalHazardModifier} from: ${activeHazards.join(', ')}. These are screening-level modifiers, not site-specific assessments.`)
+  if (hazards?.available && hazards.totalPenalty < 0) {
+    const activeHazards = hazards.hazards.filter((h) => h.available && h.penalty < 0).map((h) => h.type === 'seaLevelRise' ? 'sea-level rise' : h.type === 'wildfire' ? 'wildfire' : 'radon')
+    unknowns.push(`Regional hazard exposure (${activeHazards.join(', ')}) is scored as a weighted category from screening-level sources, not site-specific assessments.`)
   }
 
   return {
+    scoringVersion: SCORING_VERSION,
     finalScore, rawScore, scoredWeight,
     ...getVerdict(rawScore, scoredWeight, gatedToManual, evidenceCoverage),
-    confidence, confidenceLabel, confidencePenalty, regionalHazardModifier,
+    confidence, confidenceLabel, confidencePenalty,
     hardGates, gatedToManual, metrics, nationalContext,
     strengths: strengths.length ? strengths : ['No major strength has been verified yet.'],
     redFlags: redFlags.length ? redFlags : ['No hard constraint was detected at the selected point by the available sources.'],
@@ -1060,4 +1124,123 @@ function buildNextSteps(triggeredGates: HardGate[], hasParcelBoundary: boolean, 
     'Test the intended use with permits, employment, supply, absorption, and project-level financial analysis.',
   )
   return steps
+}
+
+// ---------- Score improvements ("what would raise this score") ----------
+
+// The verified ceiling each category can reach when evidence comes back
+// affirmatively strong. One-sided risk screens top out at their clean
+// parcel-wide values; upside categories reach the affirmative anchors.
+const CATEGORY_VERIFIED_CEILING: Record<ScoreCategory, number> = {
+  zoning: 90,
+  netDevelopable: 92,
+  floodplain: 68,
+  wetlands: 66,
+  slope: 82,
+  utilities: 82,
+  access: 85,
+  soils: 70,
+  stormwater: 70,
+  easements: 64,
+  contamination: 66,
+  species: 66,
+  market: 90,
+  hazards: 62,
+}
+
+// Categories whose point screens upgrade to parcel-wide overlays once a
+// parcel boundary is loaded.
+const OVERLAY_UPGRADE_CATEGORIES: ScoreCategory[] = ['netDevelopable', 'floodplain', 'wetlands', 'slope', 'soils', 'stormwater', 'contamination', 'species']
+
+// How to verify each category when it has no source at all.
+const VERIFY_COPY: Record<ScoreCategory, string> = {
+  zoning: 'Confirm the district and permitted-use table with the local jurisdiction, or add zoning notes.',
+  netDevelopable: 'Enter the assessor acreage, or select the parcel so overlays can compute net developable acreage.',
+  floodplain: 'The FEMA flood service did not return a result — retry, or check the FEMA map panel manually.',
+  wetlands: 'The NWI service did not return a result — retry, or check the USFWS wetlands mapper manually.',
+  slope: 'USGS elevation sampling did not return a result — retry, or review terrain manually.',
+  utilities: 'Answer the utilities-nearby question, or request service-area maps from the local providers.',
+  access: 'Answer the road-frontage question, or confirm access from recorded plats.',
+  soils: 'NRCS Soil Data Access did not return a result — retry; running the data proxy usually resolves this.',
+  stormwater: 'USGS drainage sampling did not return a result — retry.',
+  easements: 'Check county GIS or a title commitment for recorded easements and rights-of-way.',
+  contamination: 'EPA FRS did not return a result — retry; running the data proxy usually resolves this.',
+  species: 'USFWS ECOS did not return a result — retry; running the data proxy usually resolves this.',
+  market: 'Add VITE_CENSUS_API_KEY to enable ACS population trend and BPS building permits.',
+  hazards: 'NOAA, USFS, and EPA hazard screens did not return results — retry.',
+}
+
+export interface ScoreImprovement {
+  id: string
+  action: string
+  detail: string
+  // Best-case movement in the final score if the verified evidence comes back
+  // clean/strong. Adverse findings lower the score instead — which is equally
+  // valuable to know before spending diligence money.
+  potentialGain: number
+}
+
+export function buildScoreImprovements(analysis: SiteAnalysis, hasParcelOverlays: boolean): ScoreImprovement[] {
+  const raw = analysis.rawScore
+  if (raw === null) return []
+  const scoredWeight = analysis.scoredWeight
+  const penaltyAt = (weight: number) => Math.min(10, Math.round((100 - weight) / 5))
+  const improvements: ScoreImprovement[] = []
+
+  // 1. Categories with no source at all: scoring them adds weighted evidence
+  // and recovers part of the confidence penalty.
+  for (const metric of Object.values(analysis.metrics)) {
+    if (metric.score !== null) continue
+    const w = metric.weight
+    const newRaw = (raw * scoredWeight + CATEGORY_VERIFIED_CEILING[metric.category] * w) / (scoredWeight + w)
+    const gain = Math.round(newRaw - raw + (penaltyAt(scoredWeight) - penaltyAt(scoredWeight + w)))
+    if (gain < 1) continue
+    improvements.push({
+      id: `verify-${metric.category}`,
+      action: `Verify ${metric.label.toLowerCase().replace(' (wildfire, slr, radon)', '')}`,
+      detail: VERIFY_COPY[metric.category],
+      potentialGain: gain,
+    })
+  }
+
+  // 2. Upgrade point screens to parcel-wide overlays. One aggregate lever:
+  // each point-screened category can rise to its parcel-wide verified ceiling.
+  if (!hasParcelOverlays) {
+    let weightedGap = 0
+    for (const category of OVERLAY_UPGRADE_CATEGORIES) {
+      const metric = analysis.metrics[category]
+      if (!metric || metric.score === null) continue
+      weightedGap += Math.max(0, CATEGORY_VERIFIED_CEILING[category] - metric.score) * metric.weight
+    }
+    const gain = Math.round(weightedGap / scoredWeight)
+    if (gain >= 1) {
+      improvements.push({
+        id: 'run-overlays',
+        action: 'Run parcel-wide overlays',
+        detail: 'Select the parcel boundary so FEMA, NWI, slope, soils, stormwater, contamination, habitat, and setbacks are screened across the whole parcel instead of one point — and net developable acreage is computed instead of estimated from gross acres.',
+        potentialGain: gain,
+      })
+    }
+  }
+
+  // 3. Upgrade user-supplied answers to official evidence.
+  const userUpgradeCopy: Partial<Record<ScoreCategory, string>> = {
+    zoning: 'Your zoning note is unverified. Confirming the use in the jurisdiction\'s permitted-use table scores higher than any note.',
+    utilities: 'Your utilities answer is unverified. Mapped service areas — and ultimately will-serve letters — are stronger evidence.',
+    access: 'Your frontage answer is unverified. A mapped road plus assessor frontage scores higher.',
+  }
+  for (const category of ['zoning', 'utilities', 'access'] as ScoreCategory[]) {
+    const metric = analysis.metrics[category]
+    if (!metric || metric.score === null || metric.status !== 'user') continue
+    const gain = Math.round(((CATEGORY_VERIFIED_CEILING[category] - metric.score) * metric.weight) / scoredWeight)
+    if (gain < 1) continue
+    improvements.push({
+      id: `official-${category}`,
+      action: `Replace your ${metric.label.toLowerCase()} answer with official evidence`,
+      detail: userUpgradeCopy[category] ?? '',
+      potentialGain: gain,
+    })
+  }
+
+  return improvements.sort((a, b) => b.potentialGain - a.potentialGain).slice(0, 5)
 }

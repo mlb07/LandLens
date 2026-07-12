@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react'
-import { ArrowLeft, BarChart3, Download, FileJson, FileText, FolderOpen, MapPin, Plus, Trash2, Upload } from 'lucide-react'
+import { ArrowLeft, BarChart3, Download, FileJson, FileText, FolderOpen, MapPin, Plus, RefreshCw, Trash2, Upload } from 'lucide-react'
 import type { MetricResult, SavedSite, ScoreCategory } from '../types/site'
 import { parseBatchCsv, type BatchScreeningResult, type BatchScreeningRow } from '../data/batchScreening'
 import { sitesToCsv, sitesToGeoJson } from '../data/siteExports'
+import { SCORING_VERSION } from '../lib/scoring'
 
 const COMPARISON_COLUMNS: Array<{ category: ScoreCategory; short: string }> = [
   { category: 'zoning', short: 'Zoning' },
@@ -17,6 +18,10 @@ const COMPARISON_COLUMNS: Array<{ category: ScoreCategory; short: string }> = [
 
 function metricOf(site: SavedSite, category: ScoreCategory): MetricResult | undefined {
   return site.analysis?.metrics?.[category]
+}
+
+function isOutdated(site: SavedSite): boolean {
+  return site.analysis?.scoringVersion !== SCORING_VERSION
 }
 
 function parcelValue(site: SavedSite): string {
@@ -34,17 +39,32 @@ function downloadText(filename: string, content: string, type: string) {
   URL.revokeObjectURL(url)
 }
 
-export function SavedSites({ sites, onOpen, onReport, onDelete, onExplore, onImportBatch }: {
+export function SavedSites({ sites, onOpen, onReport, onDelete, onExplore, onImportBatch, onRescreenOutdated }: {
   sites: SavedSite[]
   onOpen: (site: SavedSite) => void
   onReport: (site: SavedSite) => void
   onDelete: (id: string) => void
   onExplore: () => void
   onImportBatch: (rows: BatchScreeningRow[], onProgress: (completed: number, total: number) => void) => Promise<BatchScreeningResult[]>
+  onRescreenOutdated: (onProgress: (completed: number, total: number) => void) => Promise<{ updated: number; failed: number }>
 }) {
   const fileInput = useRef<HTMLInputElement>(null)
   const [batchStatus, setBatchStatus] = useState('')
   const [batchRunning, setBatchRunning] = useState(false)
+  const outdatedCount = sites.filter(isOutdated).length
+
+  async function rescreenOutdated() {
+    setBatchRunning(true)
+    setBatchStatus(`Re-screening 0 of ${outdatedCount} outdated sites…`)
+    try {
+      const { updated, failed } = await onRescreenOutdated((completed, total) => setBatchStatus(`Re-screening ${completed} of ${total} outdated sites…`))
+      setBatchStatus(failed ? `${updated} sites re-screened on the current scale; ${failed} failed — retry later.` : `${updated} sites re-screened on the current scale.`)
+    } catch (error) {
+      setBatchStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBatchRunning(false)
+    }
+  }
 
   async function importCsv(file?: File) {
     if (!file) return
@@ -83,6 +103,14 @@ export function SavedSites({ sites, onOpen, onReport, onDelete, onExplore, onImp
         {batchStatus && <span role="status">{batchStatus}</span>}
       </div>
 
+      {outdatedCount > 0 && (
+        <div className="outdated-banner">
+          <RefreshCw size={16} />
+          <p><strong>{outdatedCount} {outdatedCount === 1 ? 'site was' : 'sites were'} scored on an older scale.</strong> The scoring model was recalibrated (50 is now an average parcel) — outdated scores are not comparable to new ones until re-screened.</p>
+          <button className="secondary-button" disabled={batchRunning} onClick={() => void rescreenOutdated()}><RefreshCw size={15} /> {batchRunning ? 'Re-screening…' : `Re-screen ${outdatedCount} outdated`}</button>
+        </div>
+      )}
+
       {sites.length === 0 ? (
         <div className="empty-state"><FolderOpen size={32} /><h2>No saved sites yet</h2><p>Select a location in any state, enter what you know, and save the analysis to compare it here.</p><button className="primary-button" onClick={onExplore}>Open map explorer</button></div>
       ) : (
@@ -103,7 +131,7 @@ export function SavedSites({ sites, onOpen, onReport, onDelete, onExplore, onImp
                       const metric = metricOf(site, col.category)
                       return <td key={col.category}><MetricCell score={metric?.score ?? null} label={metric?.displayValue} /></td>
                     })}
-                    <td><span className={`table-score ${site.analysis.verdictTone}`}>{site.analysis.finalScore ?? '—'}</span></td>
+                    <td><span className={`table-score ${site.analysis.verdictTone}`} title={isOutdated(site) ? 'Scored on an older scale — re-screen to compare' : undefined}>{site.analysis.finalScore ?? '—'}</span>{isOutdated(site) && <em className="stale-badge">old scale</em>}</td>
                     <td><span className={`verdict-pill ${site.analysis.verdictTone}`}>{site.analysis.verdict}</span></td>
                     <td><div className="table-actions"><button title="Open site" onClick={() => onOpen(site)}><FolderOpen size={16} /></button><button title="View report" onClick={() => onReport(site)}><FileText size={16} /></button><button title="Delete site" onClick={() => onDelete(site.id)}><Trash2 size={16} /></button></div></td>
                   </tr>
@@ -114,7 +142,7 @@ export function SavedSites({ sites, onOpen, onReport, onDelete, onExplore, onImp
           <div className="saved-card-list">
             {sites.map((site) => (
               <article className="saved-site-card" key={site.id}>
-                <div><span className={`table-score ${site.analysis.verdictTone}`}>{site.analysis.finalScore ?? '—'}</span><div><h3>{site.inputs.name || 'Untitled site'}</h3><p>{site.inputs.location || `${site.coordinates.lat.toFixed(3)}, ${site.coordinates.lng.toFixed(3)}`}</p></div></div>
+                <div><span className={`table-score ${site.analysis.verdictTone}`}>{site.analysis.finalScore ?? '—'}</span><div><h3>{site.inputs.name || 'Untitled site'}{isOutdated(site) && <em className="stale-badge">old scale</em>}</h3><p>{site.inputs.location || `${site.coordinates.lat.toFixed(3)}, ${site.coordinates.lng.toFixed(3)}`}</p></div></div>
                 <dl><div><dt>Acres</dt><dd>{site.inputs.acres || '—'}</dd></div><div><dt>Parcel value</dt><dd>{parcelValue(site)}</dd></div><div><dt>Verdict</dt><dd>{site.analysis.verdict}</dd></div></dl>
                 <div className="card-actions"><button onClick={() => onOpen(site)}>Open</button><button onClick={() => onReport(site)}>Report</button><button className="danger" onClick={() => onDelete(site.id)}>Delete</button></div>
               </article>
