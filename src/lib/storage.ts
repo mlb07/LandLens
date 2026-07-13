@@ -57,8 +57,40 @@ export function loadSites(): SavedSite[] {
   }
 }
 
-export function saveSites(sites: SavedSite[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sites))
+// localStorage has no reliable cross-browser quota API, so we watch the
+// serialized payload size ourselves. Most browsers cap an origin at ~5 MB of
+// UTF-16 data; we warn well before that so the user can export or prune
+// before a save is actually rejected. Size is measured in characters (a
+// dependency-free proxy for the real UTF-16 budget), not exact bytes.
+export const SOFT_SAVE_LIMIT_CHARS = 4_200_000
+
+export type SaveResult =
+  | { ok: true; chars: number; nearLimit: boolean }
+  | { ok: false; reason: 'quota' | 'unavailable'; chars: number }
+
+function isQuotaError(error: unknown): boolean {
+  return (
+    error instanceof DOMException &&
+    // Standard, Firefox legacy, and the legacy numeric codes respectively.
+    (error.name === 'QuotaExceededError' ||
+      error.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+      error.code === 22 ||
+      error.code === 1014)
+  )
+}
+
+// Persists the portfolio and reports the outcome instead of throwing, so
+// callers can tell the user when a save was silently rejected (full storage)
+// rather than losing the write with no feedback.
+export function saveSites(sites: SavedSite[]): SaveResult {
+  const payload = JSON.stringify(sites)
+  const chars = payload.length
+  try {
+    localStorage.setItem(STORAGE_KEY, payload)
+    return { ok: true, chars, nearLimit: chars > SOFT_SAVE_LIMIT_CHARS }
+  } catch (error) {
+    return { ok: false, reason: isQuotaError(error) ? 'quota' : 'unavailable', chars }
+  }
 }
 
 // Escape hatch for the top-level error fallback: when a corrupt saved record

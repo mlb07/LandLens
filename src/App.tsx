@@ -236,9 +236,9 @@ function App() {
     if (panelScrollRef.current) panelScrollRef.current.scrollTop = 0
   }, [panelTab])
 
-  function notify(message: string) {
+  function notify(message: string, durationMs = 2800) {
     setToast(message)
-    window.setTimeout(() => setToast(''), 2800)
+    window.setTimeout(() => setToast(''), durationMs)
   }
 
   function selectCoordinates(next: Coordinates, nextStateCode = activeStateCode) {
@@ -313,9 +313,27 @@ function App() {
     setMobileMenu(false)
   }
 
-  function persistSites(next: SavedSite[]) {
+  // Keeps the in-memory portfolio and the persisted copy in sync. Returns
+  // whether the write actually landed so callers can suppress their own
+  // success message when storage rejected it. A failed write does not roll
+  // back the in-memory state — the session stays usable; the toast warns the
+  // change won't survive a reload.
+  function persistSites(next: SavedSite[]): boolean {
     setSites(next)
-    saveSites(next)
+    const result = saveSites(next)
+    if (!result.ok) {
+      notify(
+        result.reason === 'quota'
+          ? 'Browser storage is full — this change is in memory but was not saved. Export or delete sites, then try again.'
+          : 'Could not write to browser storage — this change was not saved and will be lost on reload.',
+        6500,
+      )
+      return false
+    }
+    if (result.nearLimit) {
+      notify('Heads up: browser storage is nearly full. Export or delete sites soon to avoid losing new saves.', 6500)
+    }
+    return true
   }
 
   function saveCurrentSite() {
@@ -331,19 +349,22 @@ function App() {
     const jurisdiction = jurisdictionProfile ?? existingSite?.jurisdiction
     const authority = officialData?.authority.available ? officialData.authority.value : existingSite?.authority
     const buildableEnvelope = snapshotBuildableEnvelope(overlays) ?? existingSite?.buildableEnvelope
+    let saved: boolean
     if (currentId) {
       const next = sites.map((site) => site.id === currentId ? { ...site, stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, parcel: parcelSnapshot, authority, jurisdiction, buildableEnvelope, updatedAt: now } : site)
-      persistSites(next)
+      saved = persistSites(next)
     } else {
-      const saved: SavedSite = { id: crypto.randomUUID(), stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, parcel: parcelSnapshot, authority, jurisdiction, buildableEnvelope, createdAt: now, updatedAt: now }
-      persistSites([saved, ...sites])
-      setCurrentId(saved.id)
+      const savedSite: SavedSite = { id: crypto.randomUUID(), stateCode: activeStateCode, inputs: finalInputs, coordinates, analysis: finalAnalysis, screeningArea, parcel: parcelSnapshot, authority, jurisdiction, buildableEnvelope, createdAt: now, updatedAt: now }
+      saved = persistSites([savedSite, ...sites])
+      setCurrentId(savedSite.id)
     }
     setInputs(finalInputs)
     inputsRef.current = finalInputs
     setAnalysis(finalAnalysis)
     setDirty(false)
-    notify('Site saved to this browser')
+    // persistSites already surfaces a failure/near-limit toast; only announce
+    // the plain success case here.
+    if (saved) notify('Site saved to this browser')
   }
 
   function openSite(site: SavedSite) {
@@ -399,16 +420,19 @@ function App() {
   function deleteSite(id: string) {
     const site = sites.find((item) => item.id === id)
     if (!site || !window.confirm(`Delete “${site.inputs.name || 'Untitled site'}” from this browser?`)) return
-    persistSites(sites.filter((item) => item.id !== id))
+    const removed = persistSites(sites.filter((item) => item.id !== id))
     if (currentId === id) setCurrentId(null)
-    notify('Site deleted')
+    if (removed) notify('Site deleted')
   }
 
   async function importBatch(rows: BatchScreeningRow[], onProgress: (completed: number, total: number) => void): Promise<BatchScreeningResult[]> {
     const results = await screenBatch(rows, (completed, total) => onProgress(completed, total))
     const imported = results.flatMap((result) => result.site ? [result.site] : [])
-    if (imported.length) persistSites([...imported, ...sites])
-    notify(`${imported.length} batch site${imported.length === 1 ? '' : 's'} saved${results.length > imported.length ? ` · ${results.length - imported.length} failed` : ''}`)
+    const failedCount = results.length - imported.length
+    const stored = imported.length ? persistSites([...imported, ...sites]) : true
+    // persistSites surfaces its own storage-failure toast; only report the
+    // batch tally when the write actually persisted.
+    if (stored) notify(`${imported.length} batch site${imported.length === 1 ? '' : 's'} saved${failedCount ? ` · ${failedCount} failed` : ''}`)
     return results
   }
 
@@ -419,9 +443,9 @@ function App() {
     const updatedById: Record<string, SavedSite> = {}
     for (const result of results) if (result.site) updatedById[result.id] = result.site
     const updated = Object.keys(updatedById).length
-    if (updated) persistSites(sites.map((site) => updatedById[site.id] ?? site))
+    const stored = updated ? persistSites(sites.map((site) => updatedById[site.id] ?? site)) : true
     const failed = results.length - updated
-    notify(`${updated} site${updated === 1 ? '' : 's'} re-screened on the current scale${failed ? ` · ${failed} failed` : ''}`)
+    if (stored) notify(`${updated} site${updated === 1 ? '' : 's'} re-screened on the current scale${failed ? ` · ${failed} failed` : ''}`)
     return { updated, failed }
   }
 

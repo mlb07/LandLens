@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { clearSavedSites, loadSites, saveSites } from './storage'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { clearSavedSites, loadSites, saveSites, SOFT_SAVE_LIMIT_CHARS } from './storage'
 import type { SavedSite } from '../types/site'
 
 const STORAGE_KEY_V2 = 'landlens.saved-sites.v2'
@@ -153,5 +153,54 @@ describe('storage', () => {
     clearSavedSites()
     expect(localStorage.getItem(STORAGE_KEY_V2)).toBeNull()
     expect(localStorage.getItem(STORAGE_KEY_V1)).toBeNull()
+  })
+
+  it('saveSites returns a success result with the payload size', () => {
+    const result = saveSites([])
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.chars).toBe('[]'.length)
+      expect(result.nearLimit).toBe(false)
+    }
+  })
+
+  it('saveSites flags nearLimit for an oversized payload', () => {
+    // A single site whose serialized form exceeds the soft threshold.
+    const bulky = { id: 'big', inputs: { notes: 'x'.repeat(SOFT_SAVE_LIMIT_CHARS + 10) } } as unknown as SavedSite
+    const result = saveSites([bulky])
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.nearLimit).toBe(true)
+  })
+
+  it('saveSites reports a quota failure instead of throwing', () => {
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('exceeded', 'QuotaExceededError')
+    })
+    const result = saveSites([])
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toBe('quota')
+    spy.mockRestore()
+  })
+
+  it('saveSites reports a generic write failure as unavailable', () => {
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage disabled')
+    })
+    const result = saveSites([])
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toBe('unavailable')
+    spy.mockRestore()
+  })
+
+  it('loadSites keeps the migrated portfolio in memory even if the re-persist write fails', () => {
+    const legacy = makeLegacySite()
+    localStorage.setItem(STORAGE_KEY_V1, JSON.stringify([legacy]))
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('exceeded', 'QuotaExceededError')
+    })
+    const loaded = loadSites()
+    expect(loaded).toHaveLength(1)
+    expect(loaded[0].inputs.name).toBe('Old Austin site')
+    spy.mockRestore()
   })
 })

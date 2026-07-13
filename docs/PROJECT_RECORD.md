@@ -205,6 +205,12 @@ The official-data provider, scoring layer, and parcel-provider interface are sep
 
 ## Change log
 
+### 2026-07-13 — localStorage quota safety
+
+- **`saveSites` no longer fails silently.** It now returns a `SaveResult` (`{ ok, chars, nearLimit }` on success; `{ ok: false, reason: 'quota' | 'unavailable', chars }` on failure) instead of a bare `setItem` that throws into the void. A `QuotaExceededError` (across standard, Firefox, and legacy numeric codes) is detected and reported rather than losing the write. Each saved site carries its full analysis plus boundary/buildable-envelope geometry, so a large batch import can realistically exceed the ~5 MB budget.
+- **The user is told.** `persistSites` surfaces a clear toast when a write is rejected ("Browser storage is full — this change is in memory but was not saved…") and a proactive near-limit heads-up once the serialized payload passes a soft `SOFT_SAVE_LIMIT_CHARS` (4.2 M chars) threshold. Storage-warning toasts persist longer (6.5 s) than routine ones. A failed write is **not** rolled back in memory — the session stays usable; the toast just warns the change won't survive a reload. Save/import/re-screen success toasts are now gated on the write actually landing.
+- **Tests**: 231 passing (was 226). Added 5 storage cases (success size + nearLimit, quota failure, generic-unavailable failure, and migration surviving a re-persist quota failure). Verified live in-browser by mocking `setItem` to throw `QuotaExceededError`: the save was announced as not-persisted while the in-memory portfolio still updated, and a normal save worked again once restored.
+
 ### 2026-07-13 — Error boundaries + storage resilience
 
 - **New `src/components/ErrorBoundary.tsx`**: a class boundary so one render error can no longer white-screen the app. Supports a full-page `variant` (catastrophic fallback with Try again / Reload / a confirm-gated "Reset saved data" escape hatch, and a dev-only stack trace) and an `inline` variant (a compact card that keeps the surrounding shell usable). `resetKeys` auto-recover a boundary when the user navigates or selects a new site; also supports `onError`, `onReset`, and a custom `fallback` render prop.
