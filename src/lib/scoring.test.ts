@@ -52,15 +52,16 @@ describe('analyzeSite — basic scenarios', () => {
     expect(result.verdict).toBe('Not enough verified data')
   })
 
-  it('returns a mid-to-upper score with full official point data and good inputs', () => {
-    // Good point-level evidence + user-reported by-right zoning lands in the
-    // "viable" band on the recentered scale — "strong" is reserved for
-    // parcel-wide verified evidence with affirmative strengths.
+  it('lifts strong point-level evidence into the strong band on the standardized curve', () => {
+    // GOOD_INPUTS is a genuinely strong parcel (by-right zoning, sourced water
+    // + sewer, close road, flat, clean flood/wetland/contamination, hot
+    // market). Its raw weighted quality (~69) stands ~1σ above the mean, so on
+    // the standardized curve it lands in the strong band (~75+).
     const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial)
     expect(result.finalScore).not.toBeNull()
-    expect(result.finalScore!).toBeGreaterThanOrEqual(60)
-    expect(result.finalScore!).toBeLessThanOrEqual(75)
-    expect(result.verdict).toContain('Viable')
+    expect(result.finalScore!).toBeGreaterThanOrEqual(72)
+    expect(result.finalScore!).toBeLessThanOrEqual(88)
+    expect(result.verdict).toContain('Strong')
   })
 
   it('produces exactly 14 metrics', () => {
@@ -511,9 +512,9 @@ describe('analyzeSite — regional hazards category', () => {
 })
 
 describe('analyzeSite — verdict bands', () => {
-  it('returns the viable band for good point-level evidence', () => {
+  it('returns the strong band for strong point-level evidence', () => {
     const result = analyzeSite(COORDS, GOOD_INPUTS, fullOfficial)
-    expect(result.verdictTone).toBe('interesting')
+    expect(result.verdictTone).toBe('strong')
   })
 
   it('returns "Manual diligence required" for any gate', () => {

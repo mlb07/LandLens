@@ -25,7 +25,7 @@ The first working version must let a user:
 
 The score uses an agreed **hybrid gate + weighted score** model. First, hard gates screen for conditions serious enough to send the parcel straight to manual diligence. Then a 14-category weighted score ranks the survivors.
 
-**Score calibration (2026-07-11):** 50 is an average parcel, not a passing grade. 0–25 is a verified hard problem; 25–45 a meaningful constraint; ~50 average; 55–60 a clean point screen; 62–70 a clean parcel-wide verified screen; 75+ requires affirmative verified strength (by-right use in the permitted-use table, sourced water + sewer, net/gross ≥ 90%, strong market). One-sided risk screens (flood, wetlands, contamination, species, easements, hazards) top out in the 60s by design — the absence of a problem is the norm, not excellence.
+**Score calibration:** the per-category anchors keep 50 as an average parcel (0–25 verified hard problem; 25–45 meaningful constraint; clean screens 55–70; one-sided risk screens top out in the 60s). The weighted average of those categories (the "raw weighted quality") is then **standardized (2026-07-13)** onto a normal-style curve where 50 is the mean and every 25 points is one standard deviation: +1σ→75, +2σ→100, −1σ→25, −2σ→0, clamped at ±2σ (`SCORE_MEAN` 50, `SCORE_STDEV` 18 in `scoring.ts`). Output stays continuous (e.g. +0.56σ → 64). This spreads the practical range so a clearly-above-average parcel reaches the mid-to-high 70s and a clearly-poor one falls to the teens, per the "more forgiving / more punishing" ranking intent. σ is a modeled parameter calibrated against the archetype fixtures, an explicit assumption rather than a live parcel census.
 
 ### Hard gates (any one → "Manual diligence required" verdict, no numeric rank)
 
@@ -63,16 +63,16 @@ Net developable acreage owns the *quantity* question (how much usable land survi
 - **Regional hazards** are now a weighted category (above), not a score modifier. Clean screen ≈ 62; worst combined exposure ≈ 12.
 - **Confidence penalty:** 0 to −10 scaled by the total category *weight* with no source at all (≈1 point per 5 unscored weight points), so a missing high-weight category costs more than a missing low-weight one.
 
-### Verdict bands (recentered 2026-07-11)
+### Verdict bands (evaluated on the standardized final score, 2026-07-13)
 
-| Score | Verdict |
-| --- | --- |
-| 75–100 | Strong shortlist candidate |
-| 50–74 | Viable — needs targeted diligence |
-| 38–49 | Challenged — only if pricing/assemblage is exceptional |
-| Below 38 | Low priority / likely reject |
-| Any hard gate triggered | Manual diligence required |
-| Less than 50% weighted evidence | Not enough verified data; no numeric score |
+| Score | Verdict | On the curve |
+| --- | --- | --- |
+| 75–100 | Strong shortlist candidate | ≥ +1σ |
+| 50–74 | Viable — needs targeted diligence | mean to +1σ |
+| 38–49 | Challenged — only if pricing/assemblage is exceptional | ≈ −0.5σ to mean |
+| Below 38 | Low priority / likely reject | below ≈ −0.5σ |
+| Any hard gate triggered | Manual diligence required | — |
+| Less than 50% weighted evidence | Not enough verified data; no numeric score | — |
 
 The principle is unchanged from the original MVP: **never fabricate.** Categories without a wired official source are shown as unavailable or user-supplied and excluded from the weighted calculation until a real source is wired. The ≥50% weighted evidence rule still gates whether any numeric score is shown.
 
@@ -204,6 +204,13 @@ The official-data provider, scoring layer, and parcel-provider interface are sep
 13. ~~Normalize and persist development-relevant assessor parcel attributes.~~ **Done: rich facts from FL/CT/MT/NY and all eight Texas county parcel sources, dedicated explorer/report surfaces, privacy filtering, scoring use for parcel zoning/utilities/frontage, unit contracts, live schema checks, and E2E persistence coverage.**
 
 ## Change log
+
+### 2026-07-13 — Standard-deviation score scaling
+
+- **The final score is now a standardized position on a normal-style curve.** The raw weighted quality score is mapped by `standardizeScore` = `clamp(50 + 25·(raw − 50)/18)`: 50 = mean parcel, every 25 points = one standard deviation, so +1σ→75, +2σ→100, −1σ→25, −2σ→0. The scale deliberately spans ±2σ (~95% of parcels) and clamps beyond, making the ranking "more forgiving / more punishing" per the request. Output is continuous (e.g. +0.56σ → 64), not snapped to the σ marks. `SCORE_MEAN`/`SCORE_STDEV` are exported, documented modeling constants calibrated against the archetype fixtures.
+- **Verdict now keys off the displayed (standardized) score**, not the raw weighted average, so the band label always matches the number shown. Bands unchanged (75/50/38); on the standardized scale 75 = +1σ, 50 = mean.
+- The confidence penalty is applied after standardization; the ScorePanel and report explain the raw → standardized → final chain.
+- **Tests**: 238 passing. Calibration archetypes now spread wider (prime ~88, average ~50, constrained ~40, poor ~15) and a new case asserts scores are continuous (a constrained parcel never lands on a σ mark). Two `scoring.test` expectations updated: strong point-level evidence (GOOD_INPUTS) legitimately reaches the strong band (~76) under the wider spread.
 
 ### 2026-07-13 — Access measured from the parcel boundary, not the clicked point
 

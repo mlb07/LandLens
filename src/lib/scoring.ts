@@ -68,8 +68,22 @@ const MIN_VIABLE_ACRES: Record<IntendedUse, number> = {
   other: 0.15,
 }
 
-// Bands assume the recentered scale where ~50 is an average parcel. A fully
-// verified, affirmatively strong parcel lands in the high 70s; 75+ is rare.
+// Standardization of the raw weighted quality score onto a normal-style curve:
+// 50 is an average parcel and every 25 points is one standard deviation, so
+// +1σ→75, +2σ→100, −1σ→25, −2σ→0. The visible scale therefore spans ±2σ
+// (~95% of parcels); genuinely exceptional or hopeless parcels clamp at the
+// ends, which is the intended "more forgiving / more punishing" ranking. The
+// output stays continuous (e.g. +0.56σ → 64), not snapped to the σ marks.
+//
+// SCORE_MEAN / SCORE_STDEV are modeled population parameters for the raw
+// weighted score. They are calibrated against the archetype fixtures in
+// scoring.calibration.test.ts, not measured from a live parcel census, so they
+// are an explicit modeling assumption — documented here rather than hidden.
+export const SCORE_MEAN = 50
+export const SCORE_STDEV = 18
+
+// Bands operate on the standardized final score. 75 = +1σ (top ~16%),
+// 50 = average, 38 ≈ −0.5σ, below that a likely reject.
 const VERDICT_BANDS: Array<{ min: number; verdict: string; tone: VerdictTone }> = [
   { min: 75, verdict: 'Strong shortlist candidate', tone: 'strong' },
   { min: 50, verdict: 'Viable — needs targeted diligence', tone: 'interesting' },
@@ -79,6 +93,12 @@ const VERDICT_BANDS: Array<{ min: number; verdict: string; tone: VerdictTone }> 
 
 function clamp(value: number) {
   return Math.max(0, Math.min(100, Math.round(value)))
+}
+
+// Map the raw weighted quality score onto the standardized 0–100 curve
+// (50 = mean, 25 = one standard deviation). Continuous, then clamped to ±2σ.
+function standardizeScore(raw: number): number {
+  return clamp(50 + 25 * (raw - SCORE_MEAN) / SCORE_STDEV)
 }
 
 function missingMetric(category: ScoreCategory, detail: string, provenance?: MetricResult['provenance']): MetricResult {
@@ -906,13 +926,15 @@ function evaluateHardGates(metrics: Record<ScoreCategory, MetricResult>, inputs:
 
 // ---------- Verdict ----------
 
-function getVerdict(rawScore: number | null, scoredWeight: number, gatedToManual: boolean, evidenceCoverage: 'partial' | 'full'): Pick<SiteAnalysis, 'verdict' | 'verdictTone'> {
+// Verdict is keyed off the standardized final score — the same number the user
+// sees — so the band label always matches the displayed score.
+function getVerdict(finalScore: number | null, scoredWeight: number, gatedToManual: boolean, evidenceCoverage: 'partial' | 'full'): Pick<SiteAnalysis, 'verdict' | 'verdictTone'> {
   if (gatedToManual) return { verdict: 'Manual diligence required', verdictTone: 'manual' }
-  if (rawScore === null) return { verdict: 'Not enough verified data', verdictTone: 'research' }
-  if (scoredWeight < 75 && rawScore >= 60 && evidenceCoverage === 'partial') {
+  if (finalScore === null) return { verdict: 'Not enough verified data', verdictTone: 'research' }
+  if (scoredWeight < 75 && finalScore >= 55 && evidenceCoverage === 'partial') {
     return { verdict: 'Promising, limited evidence', verdictTone: 'research' }
   }
-  const band = VERDICT_BANDS.find((entry) => rawScore >= entry.min)
+  const band = VERDICT_BANDS.find((entry) => finalScore >= entry.min)
   return band ? { verdict: band.verdict, verdictTone: band.tone } : { verdict: 'Not enough verified data', verdictTone: 'research' }
 }
 
@@ -1012,12 +1034,13 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
   const unknownCount = Object.values(metrics).filter((metric) => metric.status === 'unknown').length
   const confidencePenalty = Math.min(10, Math.round((100 - scoredWeight) / 5))
 
-  // Final score applies the confidence penalty to the raw score, but only when
-  // there is enough weighted evidence. A gated site keeps its computed score
-  // for transparency but the verdict is "Manual diligence required".
+  // Final score standardizes the raw weighted quality onto the 50-mean /
+  // 25-per-σ curve, then applies the confidence penalty — but only when there
+  // is enough weighted evidence. A gated site keeps its computed score for
+  // transparency but the verdict is "Manual diligence required".
   let finalScore: number | null = null
   if (rawScore !== null) {
-    finalScore = clamp(rawScore - confidencePenalty)
+    finalScore = clamp(standardizeScore(rawScore) - confidencePenalty)
   }
 
   // Confidence: separate from the score, reflects how much is verified.
@@ -1117,7 +1140,7 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
   return {
     scoringVersion: SCORING_VERSION,
     finalScore, rawScore, scoredWeight,
-    ...getVerdict(rawScore, scoredWeight, gatedToManual, evidenceCoverage),
+    ...getVerdict(finalScore, scoredWeight, gatedToManual, evidenceCoverage),
     confidence, confidenceLabel, confidencePenalty,
     hardGates, gatedToManual, metrics, nationalContext,
     strengths: strengths.length ? strengths : ['No major strength has been verified yet.'],

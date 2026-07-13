@@ -109,9 +109,7 @@ export function SiteReport({ site, onBack }: { site: SavedSite; onBack: () => vo
           <div className="report-metrics">
             {Object.values(analysis.metrics).map((metric) => <div key={metric.category}><div><span>{metric.label}</span><em>{metric.weight}% weight</em></div><strong>{metric.score ?? '—'}</strong><div className="metric-track"><i style={{ width: `${metric.score ?? 0}%` }} /></div><p>{metric.summary}</p></div>)}
           </div>
-          {analysis.confidencePenalty !== 0 && (
-            <p className="report-modifier-line">Raw weighted score {analysis.rawScore ?? '—'} · confidence penalty −{analysis.confidencePenalty} · adjusted {analysis.finalScore}.</p>
-          )}
+          <p className="report-modifier-line">Weighted quality {analysis.rawScore ?? '—'} standardized to the parcel curve (50 = average, 25 points per standard deviation){analysis.confidencePenalty !== 0 ? ` · −${analysis.confidencePenalty} confidence penalty` : ''} · final {analysis.finalScore}.</p>
         </section>
         <section className="report-section">
           <div className="report-section-title"><span>02</span><div><h2>Screening findings</h2><p>What looks promising, what needs attention, and what remains unknown.</p></div></div>

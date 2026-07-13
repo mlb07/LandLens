@@ -40,7 +40,7 @@ export function ScorePanel({ analysis, dirty, loading, pendingSources = 0, fetch
         <div className="score-hero-copy">
           <span className="eyebrow">Development feasibility</span>
           <h2>{analysis.verdict}</h2>
-          <p>A preliminary signal for deciding whether this site deserves deeper research. On this scale 50 is an average parcel — 75+ is exceptional, verified land.</p>
+          <p>A preliminary signal for deciding whether this site deserves deeper research. 50 is an average parcel and every 25 points is one standard deviation — 75 is about a standard deviation above average, 100 roughly two.</p>
         </div>
       </section>
 
@@ -99,7 +99,7 @@ export function ScorePanel({ analysis, dirty, loading, pendingSources = 0, fetch
             <div className="modifier-row"><Slash size={14} /><span>Regional hazards (weighted category)</span><strong>Unavailable</strong></div>
           )}
           <div className="modifier-row"><Database size={14} /><span>Confidence penalty (missing official data)</span><strong>−{analysis.confidencePenalty}</strong></div>
-          <p>Raw weighted score {analysis.rawScore ?? '—'} → adjusted {analysis.finalScore}. Regional hazards contribute through the weighted hazards category, not a separate modifier.</p>
+          <p>Weighted quality {analysis.rawScore ?? '—'} → standardized to the parcel curve (50 = average, 25 per standard deviation){analysis.confidencePenalty !== 0 ? `, then −${analysis.confidencePenalty} confidence penalty` : ''} → {analysis.finalScore}. Regional hazards contribute through the weighted hazards category, not a separate modifier.</p>
         </section>
       )}
 

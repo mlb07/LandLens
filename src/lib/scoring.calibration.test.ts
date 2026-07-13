@@ -209,4 +209,11 @@ describe('score calibration — distribution across archetypes', () => {
     expect(average.finalScore!).toBeGreaterThan(constrained.finalScore! + 5)
     expect(constrained.finalScore!).toBeGreaterThan(poor.finalScore! + 5)
   })
+
+  it('produces continuous scores, not just the standard-deviation marks', () => {
+    // The constrained parcel (33–45) can never coincide with a σ mark, so its
+    // score demonstrates that the scale yields in-between values (e.g. 41),
+    // not only 0 / 25 / 50 / 75 / 100.
+    expect([0, 25, 50, 75, 100]).not.toContain(constrained.finalScore)
+  })
 })
