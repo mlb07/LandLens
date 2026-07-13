@@ -88,6 +88,7 @@ export function SiteForm({ inputs, parcel, jurisdiction, authority, coverage, na
         <label className="field">
           <span>Estimated land price</span>
           <div className="input-prefix"><span>$</span><input value={inputs.estimatedPrice} onChange={(event) => update('estimatedPrice', event.target.value)} type="number" min="0" step="1000" placeholder="0" /></div>
+          <small className="field-hint">Powers cost per net-developable acre in the analysis.</small>
         </label>
         <label className="field field-full">
           <span>City / county / state</span>

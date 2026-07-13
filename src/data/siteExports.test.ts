@@ -42,5 +42,32 @@ describe('site exports', () => {
     ])
     expect(geojson.features[2].geometry.type).toBe('MultiPolygon')
   })
+
+  it('exports price economics against net-developable acreage', () => {
+    const priced = site()
+    priced.inputs.name = 'Priced Tract'
+    priced.inputs.estimatedPrice = '950000'
+    priced.parcel = { ...priced.parcel!, facts: { marketLandValue: 500_000 } }
+    const csv = sitesToCsv([priced])
+    const [headers, row] = csv.split('\n').map((line) => line.split(','))
+    const col = (name: string) => row[headers.indexOf(name)]
+    expect(headers).toContain('estimated_price')
+    expect(headers).toContain('price_per_acre')
+    expect(headers).toContain('price_acre_basis')
+    expect(col('estimated_price')).toBe('950000')
+    // 950000 / 9.5 net acres = 100000
+    expect(col('price_per_acre')).toBe('100000')
+    expect(col('price_acre_basis')).toBe('net')
+    // 950000 / 500000 assessed land = 1.9
+    expect(col('price_to_assessed_land')).toBe('1.9')
+  })
+
+  it('includes price economics in GeoJSON properties', () => {
+    const priced = site()
+    priced.inputs.estimatedPrice = '950000'
+    const props = sitesToGeoJson([priced]).features[0].properties
+    expect(props?.pricePerAcre).toBe(100_000)
+    expect(props?.priceAcreBasis).toBe('net')
+  })
 })
 

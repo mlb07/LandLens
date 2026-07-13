@@ -4,6 +4,7 @@ import type { MetricResult, SavedSite, ScoreCategory } from '../types/site'
 import { parseBatchCsv, type BatchScreeningResult, type BatchScreeningRow } from '../data/batchScreening'
 import { sitesToCsv, sitesToGeoJson } from '../data/siteExports'
 import { SCORING_VERSION } from '../lib/scoring'
+import { computePriceEconomics, formatUsd, type PriceEconomics } from '../lib/valuation'
 
 const COMPARISON_COLUMNS: Array<{ category: ScoreCategory; short: string }> = [
   { category: 'zoning', short: 'Zoning' },
@@ -24,10 +25,13 @@ function isOutdated(site: SavedSite): boolean {
   return site.analysis?.scoringVersion !== SCORING_VERSION
 }
 
-function parcelValue(site: SavedSite): string {
-  const facts = site.parcel?.facts
-  const value = facts?.marketValue ?? facts?.appraisedValue ?? facts?.assessedTotalValue
-  return value ? `$${Math.round(value).toLocaleString()}` : '—'
+function priceEconomicsOf(site: SavedSite): PriceEconomics | null {
+  return computePriceEconomics({
+    estimatedPrice: site.inputs.estimatedPrice,
+    netAcres: site.buildableEnvelope?.adjustedNetAcres,
+    grossAcres: site.inputs.acres,
+    facts: site.parcel?.facts,
+  })
 }
 
 function downloadText(filename: string, content: string, type: string) {
@@ -122,7 +126,7 @@ export function SavedSites({ sites, onOpen, onReport, onDelete, onExplore, onImp
           </div>
           <div className="compare-table-wrap">
             <table className="compare-table">
-              <thead><tr><th>Site</th>{COMPARISON_COLUMNS.map((col) => <th key={col.category}>{col.short}</th>)}<th>Score</th><th>Verdict</th><th><span className="sr-only">Actions</span></th></tr></thead>
+              <thead><tr><th>Site</th>{COMPARISON_COLUMNS.map((col) => <th key={col.category}>{col.short}</th>)}<th>$/acre</th><th>Score</th><th>Verdict</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {sites.map((site) => (
                   <tr key={site.id}>
@@ -131,6 +135,7 @@ export function SavedSites({ sites, onOpen, onReport, onDelete, onExplore, onImp
                       const metric = metricOf(site, col.category)
                       return <td key={col.category}><MetricCell score={metric?.score ?? null} label={metric?.displayValue} /></td>
                     })}
+                    <td>{(() => { const econ = priceEconomicsOf(site); return econ ? <span className="price-acre-cell" title={`${formatUsd(econ.totalPrice)} asking · ${econ.acreBasis === 'net' ? 'net-developable' : 'gross'}-acre basis`}>{formatUsd(econ.pricePerAcre)}<em>/{econ.acreBasis === 'net' ? 'net' : 'ac'}</em></span> : <span className="price-acre-cell empty">—</span> })()}</td>
                     <td><span className={`table-score ${site.analysis.verdictTone}`} title={isOutdated(site) ? 'Scored on an older scale — re-screen to compare' : undefined}>{site.analysis.finalScore ?? '—'}</span>{isOutdated(site) && <em className="stale-badge">old scale</em>}</td>
                     <td><span className={`verdict-pill ${site.analysis.verdictTone}`}>{site.analysis.verdict}</span></td>
                     <td><div className="table-actions"><button title="Open site" onClick={() => onOpen(site)}><FolderOpen size={16} /></button><button title="View report" onClick={() => onReport(site)}><FileText size={16} /></button><button title="Delete site" onClick={() => onDelete(site.id)}><Trash2 size={16} /></button></div></td>
@@ -143,7 +148,7 @@ export function SavedSites({ sites, onOpen, onReport, onDelete, onExplore, onImp
             {sites.map((site) => (
               <article className="saved-site-card" key={site.id}>
                 <div><span className={`table-score ${site.analysis.verdictTone}`}>{site.analysis.finalScore ?? '—'}</span><div><h3>{site.inputs.name || 'Untitled site'}{isOutdated(site) && <em className="stale-badge">old scale</em>}</h3><p>{site.inputs.location || `${site.coordinates.lat.toFixed(3)}, ${site.coordinates.lng.toFixed(3)}`}</p></div></div>
-                <dl><div><dt>Acres</dt><dd>{site.inputs.acres || '—'}</dd></div><div><dt>Parcel value</dt><dd>{parcelValue(site)}</dd></div><div><dt>Verdict</dt><dd>{site.analysis.verdict}</dd></div></dl>
+                <dl><div><dt>Acres</dt><dd>{site.inputs.acres || '—'}</dd></div><div><dt>$ / acre</dt><dd>{(() => { const econ = priceEconomicsOf(site); return econ ? `${formatUsd(econ.pricePerAcre)}/${econ.acreBasis === 'net' ? 'net' : 'ac'}` : '—' })()}</dd></div><div><dt>Verdict</dt><dd>{site.analysis.verdict}</dd></div></dl>
                 <div className="card-actions"><button onClick={() => onOpen(site)}>Open</button><button onClick={() => onReport(site)}>Report</button><button className="danger" onClick={() => onDelete(site.id)}>Delete</button></div>
               </article>
             ))}

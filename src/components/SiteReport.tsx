@@ -3,6 +3,7 @@ import { ArrowLeft, CheckCircle2, CircleHelp, ClipboardCheck, FileDown, MapPin, 
 import L from 'leaflet'
 import { GeoJSON, MapContainer, Marker, TileLayer, useMap } from 'react-leaflet'
 import { getStateDefinition } from '../data/states'
+import { computePriceEconomics, formatRatio, formatUsd } from '../lib/valuation'
 import type { HardGate, SavedSite, ScreeningArea } from '../types/site'
 import { ParcelFactsPanel } from './ParcelFactsPanel'
 import { JurisdictionPanel } from './JurisdictionPanel'
@@ -51,6 +52,7 @@ export function SiteReport({ site, onBack }: { site: SavedSite; onBack: () => vo
   const hasJurisdiction = Boolean(site.jurisdiction || site.authority)
   const hasNationalContext = Boolean(analysis.nationalContext?.length)
   const proposedUseDefinition = getJurisdictionProposedUseDefinition(site.jurisdiction, inputs.proposedUse)
+  const priceEconomics = computePriceEconomics({ estimatedPrice: inputs.estimatedPrice, netAcres: site.buildableEnvelope?.adjustedNetAcres, grossAcres: inputs.acres, facts: site.parcel?.facts })
   const sectionNumber = (value: number) => String(value).padStart(2, '0')
   const jurisdictionNumber = sectionNumber(3 + (hasNationalContext ? 1 : 0))
   const parcelNumber = sectionNumber(3 + (hasNationalContext ? 1 : 0) + (hasJurisdiction ? 1 : 0))
@@ -88,6 +90,20 @@ export function SiteReport({ site, onBack }: { site: SavedSite; onBack: () => vo
           </MapContainer>
           <div className="report-map-label"><strong>{buildableFeature ? 'Screening buildable envelope' : parcelBoundary ? 'Selected parcel' : 'Selected location'}</strong><span>{buildableFeature ? `${site.buildableEnvelope!.adjustedNetAcres.toFixed(2)} adjusted net acres · exact shared-grid union of spatial constraints; raster approximation, not a survey or legal building envelope.` : parcelBoundary ? `${inputs.acres || 'Unknown'} acres supplied by the parcel record; approximate boundary, not a survey.` : 'Map preview for orientation only. Parcel boundaries are not available.'}</span></div>
         </section>
+        {priceEconomics && (
+          <section className="report-valuation">
+            <div className="report-valuation-primary">
+              <span>Cost of buildable land</span>
+              <strong>{formatUsd(priceEconomics.pricePerAcre)}</strong>
+              <em>per {priceEconomics.acreBasis === 'net' ? 'net-developable' : 'gross'} acre</em>
+            </div>
+            <div><span>Asking price</span><strong>{formatUsd(priceEconomics.totalPrice)}</strong></div>
+            <div><span>Basis</span><strong>{priceEconomics.acres.toLocaleString('en-US', { maximumFractionDigits: 2 })} {priceEconomics.acreBasis === 'net' ? 'net' : 'gross'} acres</strong></div>
+            {priceEconomics.priceToAssessedRatio !== undefined && (
+              <div><span>vs. assessed land</span><strong>{formatRatio(priceEconomics.priceToAssessedRatio)}</strong></div>
+            )}
+          </section>
+        )}
         <section className="report-section">
           <div className="report-section-title"><span>01</span><div><h2>Score breakdown</h2><p>Each category contributes its listed weight to the final score. Unscored categories had no verified source.</p></div></div>
           <div className="report-metrics">

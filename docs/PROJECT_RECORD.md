@@ -205,6 +205,13 @@ The official-data provider, scoring layer, and parcel-provider interface are sep
 
 ## Change log
 
+### 2026-07-12 — Price-per-net-acre (land economics)
+
+- **New `src/lib/valuation.ts`**: `computePriceEconomics` derives cost per developable acre from the user's asking price and the parcel's usable acreage. Prefers verified net-developable acreage (`buildableEnvelope.adjustedNetAcres`), falls back to gross acres with an explicit `acreBasis` flag, and returns null when price or acreage is missing/non-positive (guards divide-by-zero on fully constrained parcels). Also computes `priceToAssessedRatio` against the parcel's *land* value (market → appraised → assessed), and ships `formatUsd`/`formatRatio` display helpers. Price never feeds the feasibility score — it is the buyer's variable, surfaced beside the score, not inside it.
+- **Surfaced everywhere the number matters**: a premium valuation card in the ScorePanel (big "$X / net-developable acre" with asking price, basis, and vs-assessed ratio); a valuation band in the printed report; a `$/acre` column in the portfolio comparison table and mobile cards (replacing the less-actionable parcel-value cell); a discoverability hint under the price form field.
+- **Exports**: CSV gained `estimated_price`, `price_per_acre`, `price_acre_basis`, `price_to_assessed_land` (estimated_price was previously collected but never exported); GeoJSON properties gained `estimatedPrice`, `pricePerAcre`, `priceAcreBasis`.
+- **Tests**: 216 passing (was 200). Added `valuation.test.ts` (14 cases: net/gross basis, currency parsing, zero/negative/missing guards, assessed-value preference) and 2 `siteExports` cases asserting the new columns and GeoJSON properties. Verified in-browser: valuation card, portfolio column, and report band all render with correct math ($480k / 12 ac = $40k/gross acre).
+
 ### 2026-07-12 — "Field office" visual redesign; scoring version + re-screening; score levers
 
 - **Complete frontend restyle** (`index.html`, `src/index.css`, `src/App.css`): dark topographic shell (deep green-black surfaces) with a survey-lime accent, Fraunces display serif for headings and score numerals, JetBrains Mono for coordinates and data values, and a subtle contour-line SVG texture on hero/empty/report backgrounds. The map stays light (the artifact you study); the report stays a white paper sheet (the deliverable you print) — all `.report-sheet` content is scoped to paper tokens so print output is unchanged. All existing class names and layout geometry were preserved; only the visual system changed. Verified in-browser at desktop and mobile widths: explorer, site-inputs form, portfolio table, and report.

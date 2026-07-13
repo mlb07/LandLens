@@ -40,6 +40,7 @@ VITE_DATA_PROXY_URL=https://data.example.com/api/data npm run build
 - Exact screening buildable envelope: floodway, wetlands, interpolated slope over 20%, mapped easement/ROW polygons, and setbacks are unioned cell-by-cell on one deterministic parcel grid so overlaps count once. Soil shares and title-only easement flags are visibly separated as non-spatial aggregate adjustments
 - Hybrid gate + 14-category weighted feasibility score, calibrated so 50 is an average parcel: clean screens score near-average, 75+ requires affirmative verified strength, with hard-gate manual-diligence routing, a weighted regional-hazards category (sea-level rise, wildfire, radon), and a weight-scaled confidence penalty
 - All 14 scoring categories wired to data sources — no fabricated values, no neutral fallbacks
+- Cost of buildable land: price per net-developable acre (falls back to gross acres) with a comparison to the assessor's land value — surfaced in the analysis, the report, the portfolio comparison, and CSV/GeoJSON exports
 - Exact parcel outlining and source-backed name/acreage autofill through 58 verified public adapters, including new Sonoma County (CA), Wyandotte County (KS), and statewide Mississippi sources
 - Fifty-seven enriched parcel adapters plus one audited geometry-only source normalize every usable development-relevant public field they publish; owner names and mailing addresses are intentionally excluded
 - Optional Census ACS population trend with a free Census API key

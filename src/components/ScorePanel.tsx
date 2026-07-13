@@ -1,7 +1,8 @@
-import { AlertOctagon, AlertTriangle, CheckCircle2, CircleHelp, Database, ExternalLink, LoaderCircle, MapPinned, Sparkles, Slash, TrendingUp, Waves, Flame, Atom } from 'lucide-react'
+import { AlertOctagon, AlertTriangle, CheckCircle2, CircleHelp, Database, ExternalLink, LoaderCircle, MapPinned, Sparkles, Slash, TrendingUp, Waves, Flame, Atom, Landmark } from 'lucide-react'
 import type { RegionalHazardData } from '../data/regionalHazardProvider'
 import type { DataStatus, SiteAnalysis } from '../types/site'
 import { buildScoreImprovements } from '../lib/scoring'
+import { formatRatio, formatUsd, type PriceEconomics } from '../lib/valuation'
 
 function StatusBadge({ status }: { status: DataStatus }) {
   const label = status === 'official' ? 'Official source' : status === 'mock' ? 'Legacy mock' : status === 'user' ? 'User supplied' : 'Unavailable'
@@ -19,7 +20,7 @@ const HAZARD_LABELS: Record<string, string> = {
   radon: 'Radon zone (EPA)',
 }
 
-export function ScorePanel({ analysis, dirty, loading, pendingSources = 0, fetchedAt, parcelOverlaysLoading, hazards }: { analysis: SiteAnalysis; dirty: boolean; loading?: boolean; pendingSources?: number; fetchedAt?: string; parcelOverlaysLoading?: boolean; hazards?: RegionalHazardData | null }) {
+export function ScorePanel({ analysis, dirty, loading, pendingSources = 0, fetchedAt, parcelOverlaysLoading, hazards, priceEconomics }: { analysis: SiteAnalysis; dirty: boolean; loading?: boolean; pendingSources?: number; fetchedAt?: string; parcelOverlaysLoading?: boolean; hazards?: RegionalHazardData | null; priceEconomics?: PriceEconomics | null }) {
   if (loading) {
     return <div className="analysis-pending" role="status"><LoaderCircle className="spin" size={25} /><span className="eyebrow">Live source check</span><h2>Checking this location</h2><p>LandLens is querying 14 national and local sources: flood, elevation, roads, population, wetlands, soils, contamination, species, utilities, permits, stormwater, easements, zoning, and local utility service. No score will appear until enough verified evidence returns.</p></div>
   }
@@ -42,6 +43,29 @@ export function ScorePanel({ analysis, dirty, loading, pendingSources = 0, fetch
           <p>A preliminary signal for deciding whether this site deserves deeper research. On this scale 50 is an average parcel — 75+ is exceptional, verified land.</p>
         </div>
       </section>
+
+      {priceEconomics && (
+        <section className="valuation-card">
+          <div className="valuation-primary">
+            <span className="eyebrow"><Landmark size={12} /> Cost of buildable land</span>
+            <strong>{formatUsd(priceEconomics.pricePerAcre)}</strong>
+            <em>per {priceEconomics.acreBasis === 'net' ? 'net-developable' : 'gross'} acre</em>
+          </div>
+          <div className="valuation-meta">
+            <div><span>Asking price</span><strong>{formatUsd(priceEconomics.totalPrice)}</strong></div>
+            <div><span>Basis</span><strong>{priceEconomics.acres.toLocaleString('en-US', { maximumFractionDigits: 2 })} {priceEconomics.acreBasis === 'net' ? 'net' : 'gross'} ac</strong></div>
+            {priceEconomics.priceToAssessedRatio !== undefined && (
+              <div><span>vs. assessed land</span><strong className={priceEconomics.priceToAssessedRatio > 1 ? 'over' : 'under'}>{formatRatio(priceEconomics.priceToAssessedRatio)}</strong></div>
+            )}
+          </div>
+          <p>
+            {priceEconomics.acreBasis === 'gross'
+              ? 'Gross-acre basis — run parcel overlays to price against net-developable acreage.'
+              : 'Priced against verified net-developable acreage.'}
+            {priceEconomics.priceToAssessedRatio !== undefined && ` Asking is ${formatRatio(priceEconomics.priceToAssessedRatio)} the ${priceEconomics.assessedLandBasis} assessor land value (a rough, not market, benchmark).`}
+          </p>
+        </section>
+      )}
 
       {analysis.gatedToManual && (
         <section className="gate-banner">
