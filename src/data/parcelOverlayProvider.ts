@@ -1,5 +1,5 @@
 import type { DataProvenance, IntendedUse, ScreeningArea } from '../types/site'
-import { boundaryAreaSquareMeters, boundaryBBox, boundaryToArcGISPolygon, gridSampleBoundary, pointInBoundary, pointToBoundaryDistanceMeters, pointToSegmentMeters, squareMetersToAcres, type GeoBoundary } from '../lib/geometry'
+import { boundaryAreaSquareMeters, boundaryBBox, boundaryToArcGISPolygon, boundaryToNearestRoadMeters, gridSampleBoundary, pointInBoundary, pointToBoundaryDistanceMeters, pointToSegmentMeters, squareMetersToAcres, type GeoBoundary } from '../lib/geometry'
 import { fetchEasementsOverlayForParcel } from './localAdapters'
 import { externalRequest } from './externalRequest'
 
@@ -180,6 +180,19 @@ export interface BuildableEnvelopeOverlay {
   error?: string
 }
 
+export interface AccessOverlay {
+  available: boolean
+  value?: {
+    nearestDistanceMeters: number   // min distance from the parcel boundary to the nearest mapped road
+    roadName: string
+    roadClass: 'Primary' | 'Secondary' | 'Local'
+    hasFrontage: boolean            // a mapped road meets or enters the parcel boundary
+    roadCount: number               // mapped road segments considered near the parcel
+  }
+  provenance: DataProvenance
+  error?: string
+}
+
 export interface ParcelOverlayData {
   floodplain: FloodplainOverlay
   wetlands: WetlandsOverlay
@@ -192,6 +205,10 @@ export interface ParcelOverlayData {
   setback: SetbackOverlay
   buildableEnvelope: BuildableEnvelopeOverlay
   netDevelopable: NetDevelopableOverlay | null
+  // Boundary-based road proximity. Optional so existing overlay fixtures and
+  // saved snapshots remain valid; the access metric falls back to the
+  // point-based road result when it is absent.
+  access?: AccessOverlay
   fetchedAt: string
 }
 
@@ -265,6 +282,13 @@ const SETBACK_PROVENANCE: DataProvenance = {
   sourceUrl: '',
   vintage: 'Conservative US-default front/side/rear setback distances by intended use',
   coverageNote: 'Perimeter setback applied to the parcel boundary using conservative US-default front/side/rear distances by intended use. The front edge is identified as the boundary edge closest to the selected pin location (a proxy for the road-facing side). Front/side/rear distances: residential 25/10/25 ft, mixed-use 30/15/20 ft, commercial 50/20/30 ft, industrial 50/30/30 ft, other 25/10/25 ft. These are screening defaults, not jurisdiction-specific ordinances. Local zoning codes, plat notes, and HOA covenants may require different distances. Verify with the local planning department before design.',
+}
+
+const ROAD_OVERLAY_PROVENANCE: DataProvenance = {
+  source: 'U.S. Census TIGERweb Transportation (parcel overlay)',
+  sourceUrl: 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Transportation/MapServer',
+  vintage: 'Live TIGERweb roads',
+  coverageNote: 'Minimum distance from the parcel boundary to the nearest mapped road, measured across the whole boundary rather than the clicked point. Proximity is not proof of legal access, adequate frontage, driveway approval, public maintenance, or capacity. Confirm legal access from title, recorded plats, and the road authority.',
 }
 
 const BUILDABLE_ENVELOPE_PROVENANCE: DataProvenance = {
@@ -1161,6 +1185,83 @@ async function fetchSpeciesOverlay(boundary: GeoBoundary, gridPoints: { lng: num
   }
 }
 
+// ─── Access overlay (boundary-based road proximity, TIGERweb) ───────────
+//
+// Query TIGERweb roads within an envelope around the parcel (bbox expanded by
+// a margin so a frontage road running just outside the boundary is captured),
+// then measure the minimum distance from the parcel boundary to each returned
+// road and keep the nearest. This replaces the point-based road distance,
+// which measured from wherever inside the parcel the user happened to click.
+
+interface RoadPathFeature {
+  attributes: Record<string, string | number | null>
+  geometry?: { paths?: number[][][] }
+}
+
+async function fetchAccessOverlay(boundary: GeoBoundary, signal?: AbortSignal): Promise<AccessOverlay> {
+  try {
+    const bbox = boundaryBBox(boundary)
+    const midLat = (bbox.north + bbox.south) / 2
+    // Expand the query envelope by ~250 m so an adjacent frontage road that
+    // does not intersect the parcel is still returned.
+    const marginMeters = 250
+    const dLat = marginMeters / 110_540
+    const dLng = marginMeters / (111_320 * Math.max(0.2, Math.cos(midLat * Math.PI / 180)))
+    const envelope = {
+      xmin: bbox.west - dLng, ymin: bbox.south - dLat,
+      xmax: bbox.east + dLng, ymax: bbox.north + dLat,
+      spatialReference: { wkid: 4326 },
+    }
+    const layers = [{ id: 2, label: 'Primary' as const }, { id: 6, label: 'Secondary' as const }, { id: 8, label: 'Local' as const }]
+    const layerResults = await Promise.all(layers.map(async (layer) => {
+      const params = new URLSearchParams({
+        f: 'json', geometry: JSON.stringify(envelope), geometryType: 'esriGeometryEnvelope',
+        inSR: '4326', spatialRel: 'esriSpatialRelIntersects',
+        outFields: 'BASENAME,NAME,MTFCC', returnGeometry: 'true', outSR: '4326', resultRecordCount: '60',
+      })
+      const data = await getJson<{ features?: RoadPathFeature[] }>(
+        `https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Transportation/MapServer/${layer.id}/query?${params}`,
+        signal,
+      )
+      return (data.features || []).map((feature) => ({ feature, roadClass: layer.label }))
+    }))
+
+    const roads = layerResults.flat()
+    if (!roads.length) {
+      return { available: false, provenance: ROAD_OVERLAY_PROVENANCE, error: 'No mapped road within the parcel envelope.' }
+    }
+
+    let nearest: { meters: number; touches: boolean; name: string; roadClass: 'Primary' | 'Secondary' | 'Local' } | null = null
+    for (const { feature, roadClass } of roads) {
+      const paths = feature.geometry?.paths
+      if (!paths?.length) continue
+      const { meters, touches } = boundaryToNearestRoadMeters(boundary, paths)
+      if (!Number.isFinite(meters)) continue
+      if (!nearest || meters < nearest.meters) {
+        const name = String(feature.attributes.NAME || feature.attributes.BASENAME || 'Unnamed mapped road')
+        nearest = { meters, touches, name, roadClass }
+      }
+    }
+    if (!nearest) {
+      return { available: false, provenance: ROAD_OVERLAY_PROVENANCE, error: 'Returned roads had no usable geometry.' }
+    }
+    return {
+      available: true,
+      value: {
+        nearestDistanceMeters: Math.round(nearest.meters),
+        roadName: nearest.name,
+        roadClass: nearest.roadClass,
+        hasFrontage: nearest.touches,
+        roadCount: roads.length,
+      },
+      provenance: ROAD_OVERLAY_PROVENANCE,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { available: false, provenance: ROAD_OVERLAY_PROVENANCE, error: message }
+  }
+}
+
 // ─── Setback overlay (perimeter setback, intended-use-aware) ────────────
 //
 // Classifies parcel edges as front/side/rear relative to the selected pin and
@@ -1550,6 +1651,7 @@ export async function fetchParcelOverlays(
     setback: { available: false, provenance: SETBACK_PROVENANCE, error: 'Pending' },
     buildableEnvelope: { available: false, provenance: BUILDABLE_ENVELOPE_PROVENANCE, error: 'Pending' },
     netDevelopable: null,
+    access: { available: false, provenance: ROAD_OVERLAY_PROVENANCE, error: 'Pending' },
     fetchedAt: new Date().toISOString(),
   }
   const remaining = new Set<ParcelOverlayCategory>(['floodplain', 'wetlands', 'slope', 'soils', 'stormwater', 'easements', 'contamination', 'species', 'setback'])
@@ -1594,6 +1696,13 @@ export async function fetchParcelOverlays(
     })(),
     fetchContaminationOverlay(boundary, gridPoints, signal).then((v) => publish('contamination', v)),
     fetchSpeciesOverlay(boundary, gridPoints, signal).then((v) => publish('species', v)),
+    // Access is a road-proximity overlay, not a land-use takeout, so it does
+    // not flow through publish()/the buildable-envelope recompute — it merges
+    // straight onto the accumulating result and reports progress.
+    fetchAccessOverlay(boundary, signal).then((v) => {
+      data = { ...data, access: v, fetchedAt: new Date().toISOString() }
+      onProgress?.({ data, pending: [...remaining] })
+    }),
     // Setback is pure geometry (no network) — resolves instantly.
     Promise.resolve(publish('setback', computeSetbackOverlay(boundaryInput, 'residential', coordinates))),
   ])

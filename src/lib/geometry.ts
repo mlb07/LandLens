@@ -193,3 +193,84 @@ export function pointToBoundaryDistanceMeters(lng: number, lat: number, boundary
   }
   return minDist === Number.POSITIVE_INFINITY ? 0 : minDist
 }
+
+function boundaryRings(boundary: GeoBoundary): number[][][] {
+  const rings: number[][][] = []
+  if (boundary.type === 'Polygon') {
+    for (const ring of boundary.coordinates) rings.push(ring)
+  } else {
+    for (const polygon of boundary.coordinates) for (const ring of polygon) rings.push(ring)
+  }
+  return rings
+}
+
+function orientation(a: number[], b: number[], c: number[]): number {
+  return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+// Whether segments p1p2 and p3p4 cross (planar lng/lat test; exact enough at
+// parcel scale). Used to detect a road that bisects a parcel between boundary
+// vertices, which a vertex→segment distance check alone would miss.
+function segmentsIntersect(p1: number[], p2: number[], p3: number[], p4: number[]): boolean {
+  const d1 = orientation(p3, p4, p1)
+  const d2 = orientation(p3, p4, p2)
+  const d3 = orientation(p1, p2, p3)
+  const d4 = orientation(p1, p2, p4)
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
+}
+
+// Minimum distance (meters) between a parcel boundary and a single mapped road
+// polyline (an array of vertex paths, lng/lat). Unlike a point-to-road check
+// from the clicked location, this measures the *whole* boundary against the
+// road, so the result is the nearest approach of the parcel to the road.
+//
+// The true polygon-to-polyline minimum is realized at a vertex of one against
+// a segment of the other (or at a crossing). We evaluate both vertex→segment
+// directions and treat a road vertex falling inside the parcel as frontage
+// (distance 0). `touches` also fires within a few meters, since assessor and
+// TIGER geometries rarely align to the centimeter along a shared edge.
+export function boundaryToNearestRoadMeters(
+  boundary: GeoBoundary,
+  paths: number[][][],
+  touchToleranceMeters = 6,
+): { meters: number; touches: boolean } {
+  const rings = boundaryRings(boundary)
+  let min = Number.POSITIVE_INFINITY
+
+  // A road vertex inside the parcel, or a road segment crossing a boundary
+  // edge, means the road reaches the parcel — treat as frontage (distance 0).
+  for (const path of paths) {
+    for (const vertex of path) {
+      if (pointInBoundary(vertex[0], vertex[1], boundary)) return { meters: 0, touches: true }
+    }
+    for (let i = 1; i < path.length; i += 1) {
+      for (const ring of rings) {
+        for (let j = 1; j < ring.length; j += 1) {
+          if (segmentsIntersect(path[i - 1], path[i], ring[j - 1], ring[j])) return { meters: 0, touches: true }
+        }
+      }
+    }
+  }
+  // Boundary vertices → road segments.
+  for (const ring of rings) {
+    for (const vertex of ring) {
+      for (const path of paths) {
+        for (let i = 1; i < path.length; i += 1) {
+          min = Math.min(min, pointToSegmentMeters(vertex[0], vertex[1], path[i - 1], path[i]))
+        }
+      }
+    }
+  }
+  // Road vertices → boundary segments (symmetric case).
+  for (const path of paths) {
+    for (const vertex of path) {
+      for (const ring of rings) {
+        for (let i = 1; i < ring.length; i += 1) {
+          min = Math.min(min, pointToSegmentMeters(vertex[0], vertex[1], ring[i - 1], ring[i]))
+        }
+      }
+    }
+  }
+  if (min === Number.POSITIVE_INFINITY) return { meters: Number.POSITIVE_INFINITY, touches: false }
+  return { meters: min, touches: min <= touchToleranceMeters }
+}

@@ -268,6 +268,26 @@ describe('analyzeSite — parcel overlays', () => {
     expect(result.metrics.easements.displayValue).toContain('No mapped easements on parcel')
   })
 
+  it('measures access from the parcel boundary when the access overlay is available', () => {
+    const withAccess: ParcelOverlayData = {
+      ...goodOverlays,
+      access: { available: true, value: { nearestDistanceMeters: 42, roadName: 'County Rd 5', roadClass: 'Local', hasFrontage: false, roadCount: 3 }, provenance: { source: 'TIGERweb', sourceUrl: 'x' } },
+    }
+    const result = analyzeSite(COORDS, { ...GOOD_INPUTS, roadFrontage: 'unknown' }, fullOfficial, true, withAccess)
+    expect(result.metrics.access.displayValue).toContain('42 m parcel → County Rd 5')
+    expect(result.metrics.access.detail).toContain('across the whole boundary rather than the selected point')
+  })
+
+  it('credits verified frontage when a road meets the parcel boundary', () => {
+    const withFrontage: ParcelOverlayData = {
+      ...goodOverlays,
+      access: { available: true, value: { nearestDistanceMeters: 0, roadName: 'Main St', roadClass: 'Local', hasFrontage: true, roadCount: 4 }, provenance: { source: 'TIGERweb', sourceUrl: 'x' } },
+    }
+    const result = analyzeSite(COORDS, { ...GOOD_INPUTS, roadFrontage: 'unknown' }, fullOfficial, true, withFrontage)
+    expect(result.metrics.access.displayValue).toContain('Road meets parcel')
+    expect(result.metrics.access.score!).toBeGreaterThanOrEqual(82)
+  })
+
   it('reduces net developable acres when severe soils are present', () => {
     const soilOverlays: ParcelOverlayData = {
       ...goodOverlays,

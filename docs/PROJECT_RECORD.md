@@ -205,6 +205,12 @@ The official-data provider, scoring layer, and parcel-provider interface are sep
 
 ## Change log
 
+### 2026-07-13 — Access measured from the parcel boundary, not the clicked point
+
+- **New boundary-based road-proximity overlay.** The access/frontage metric previously reported "N m to <road>" measured from wherever inside the parcel the user clicked — an arbitrary point. It now measures the minimum distance from the *whole parcel boundary* to the nearest mapped road. `boundaryToNearestRoadMeters` (in `geometry.ts`) evaluates both vertex→segment directions plus a segment-intersection test, so a road that meets or bisects the parcel registers as frontage (distance 0) even when no road vertex lands inside.
+- **`AccessOverlay`** (optional field on `ParcelOverlayData`, so existing fixtures/snapshots stay valid) is fetched in `fetchParcelOverlays` by querying TIGERweb roads within a ~250 m envelope around the parcel. `accessMetric` prefers it over the point result, labels the distance as measured "across the whole boundary," and awards affirmative frontage credit when a road meets the boundary. Falls back to the point-based road result (and to user/assessor frontage) when the overlay is absent — e.g. on a point screen or a reopened saved site.
+- **Tests**: 237 passing (was 231). Added 4 geometry cases (road outside the parcel ≈ correct metric distance, near-boundary frontage detection, a bisecting road → 0, a road vertex inside → 0) and 2 scoring cases (boundary-distance display/detail, and frontage credit).
+
 ### 2026-07-13 — localStorage quota safety
 
 - **`saveSites` no longer fails silently.** It now returns a `SaveResult` (`{ ok, chars, nearLimit }` on success; `{ ok: false, reason: 'quota' | 'unavailable', chars }` on failure) instead of a bare `setItem` that throws into the void. A `QuotaExceededError` (across standard, Firefox, and legacy numeric codes) is detected and reported rather than losing the write. Each saved site carries its full analysis plus boundary/buildable-envelope geometry, so a large batch import can realistically exceed the ~5 MB budget.

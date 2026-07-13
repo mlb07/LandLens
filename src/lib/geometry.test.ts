@@ -7,6 +7,7 @@ import {
   squareMetersToAcres,
   acresToSquareMeters,
   boundaryToArcGISPolygon,
+  boundaryToNearestRoadMeters,
   type GeoBoundary,
 } from './geometry'
 
@@ -128,5 +129,45 @@ describe('boundaryToArcGISPolygon', () => {
   it('flattens MultiPolygon rings into a single rings array', () => {
     const arcgis = boundaryToArcGISPolygon(multiPolygon)
     expect(arcgis.rings).toHaveLength(2)
+  })
+})
+
+describe('boundaryToNearestRoadMeters', () => {
+  // A ~110 m square parcel near the equator (1° lat ≈ 110.5 km).
+  const parcel: GeoBoundary = {
+    type: 'Polygon',
+    coordinates: [[[0, 0], [0.001, 0], [0.001, 0.001], [0, 0.001], [0, 0]]],
+  }
+
+  it('measures the nearest-boundary distance to a road running outside the parcel', () => {
+    // Horizontal road ~110 m north of the top edge (lat 0.001 → 0.002).
+    const road = [[[-0.001, 0.002], [0.002, 0.002]]]
+    const { meters, touches } = boundaryToNearestRoadMeters(parcel, road)
+    expect(meters).toBeGreaterThan(95)
+    expect(meters).toBeLessThan(125)
+    expect(touches).toBe(false)
+  })
+
+  it('flags frontage when a road runs within a few meters of the boundary', () => {
+    // Road ~4 m north of the top edge (lat 0.001 → 0.00104).
+    const road = [[[-0.001, 0.00104], [0.002, 0.00104]]]
+    const { meters, touches } = boundaryToNearestRoadMeters(parcel, road)
+    expect(meters).toBeLessThan(6)
+    expect(touches).toBe(true)
+  })
+
+  it('returns zero when a road bisects the parcel between boundary vertices', () => {
+    // Vertical road through the middle; both road vertices are outside.
+    const road = [[[0.0005, -0.001], [0.0005, 0.002]]]
+    const { meters, touches } = boundaryToNearestRoadMeters(parcel, road)
+    expect(meters).toBe(0)
+    expect(touches).toBe(true)
+  })
+
+  it('returns zero when a road vertex sits inside the parcel', () => {
+    const road = [[[0.0005, 0.0005], [0.0005, 0.01]]]
+    const { meters, touches } = boundaryToNearestRoadMeters(parcel, road)
+    expect(meters).toBe(0)
+    expect(touches).toBe(true)
   })
 })

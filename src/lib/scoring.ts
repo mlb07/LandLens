@@ -420,8 +420,34 @@ function utilitiesMetric(inputs: SiteInputs, official?: OfficialSiteData['utilit
   )
 }
 
-function accessMetric(data: OfficialSiteData['road'] | undefined, inputs: SiteInputs, parcel?: ParcelSelection): MetricResult {
+function accessMetric(data: OfficialSiteData['road'] | undefined, inputs: SiteInputs, parcel?: ParcelSelection, overlay?: ParcelOverlayData['access']): MetricResult {
   const mappedFrontage = parcel?.facts?.frontageFeet
+  // Prefer the parcel-wide overlay: it measures from the whole boundary to the
+  // nearest road, not from wherever inside the parcel the user clicked.
+  if (overlay?.available && overlay.value) {
+    const v = overlay.value
+    const d = v.nearestDistanceMeters
+    let score = v.hasFrontage ? 82 : d <= 25 ? 74 : d <= 75 ? 62 : d <= 150 ? 50 : d <= 300 ? 40 : 28
+    if (mappedFrontage) score = Math.max(score, 72)
+    // Affirmative strength: a mapped road meets the boundary AND assessor frontage.
+    if (v.hasFrontage && mappedFrontage) score = Math.max(score, 88)
+    if (inputs.roadFrontage === 'yes') score = Math.max(score, 72)
+    if (inputs.roadFrontage === 'no') score = Math.min(score, 22)
+    return {
+      category: 'access', label: CATEGORY_LABELS.access, score, weight: CATEGORY_WEIGHTS.access,
+      status: inputs.roadFrontage === 'unknown' ? 'official' : 'user', provenance: overlay.provenance,
+      displayValue: v.hasFrontage
+        ? `Road meets parcel · ${v.roadName}${mappedFrontage ? ` · ${mappedFrontage.toLocaleString()} ft frontage` : ''}`
+        : `${d} m parcel → ${v.roadName}${mappedFrontage ? ` · ${mappedFrontage.toLocaleString()} ft frontage` : ''}`,
+      summary: inputs.roadFrontage === 'no'
+        ? 'You indicated no road frontage, which is a major constraint.'
+        : v.hasFrontage ? 'A mapped road meets the parcel boundary — likely physical frontage (legal access still unverified).'
+          : d <= 75 ? 'A mapped road is close to the parcel boundary.'
+            : d <= 300 ? 'The nearest mapped road is a moderate distance from the parcel boundary.'
+              : 'No mapped road is close to the parcel boundary.',
+      detail: `Minimum distance from the parcel boundary to the nearest mapped road (${v.roadName}, ${v.roadClass.toLowerCase()}), measured across the whole boundary rather than the selected point. ${v.roadCount} nearby road segment${v.roadCount === 1 ? '' : 's'} were considered. Proximity is not proof of legal access, adequate frontage, driveway approval, public maintenance, or capacity.`,
+    }
+  }
   if (!data?.available || !data.value) {
     if (inputs.roadFrontage === 'unknown') {
       if (mappedFrontage) {
@@ -951,7 +977,7 @@ export function analyzeSite(_coordinates: Coordinates, inputs: SiteInputs, offic
     wetlands: wetlandsMetric(official?.environmental, overlays?.wetlands),
     slope: slopeMetric(official?.slope, overlays?.slope),
     utilities: utilitiesMetric(inputs, official?.utilityService, official?.sewerService, official?.localUtility, parcel),
-    access: accessMetric(official?.road, inputs, parcel),
+    access: accessMetric(official?.road, inputs, parcel, overlays?.access),
     soils: soilsMetric(official?.soils, overlays?.soils),
     stormwater: stormwaterMetric(official?.stormwater, overlays?.stormwater),
     easements: easementsMetric(official?.easements, overlays?.easements),
