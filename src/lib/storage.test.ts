@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { loadSites, saveSites } from './storage'
+import { clearSavedSites, loadSites, saveSites } from './storage'
 import type { SavedSite } from '../types/site'
 
 const STORAGE_KEY_V2 = 'landlens.saved-sites.v2'
@@ -128,5 +128,30 @@ describe('storage', () => {
     const second = loadSites()
     expect(second).toHaveLength(first.length)
     expect(second[0].id).toBe(first[0].id)
+  })
+
+  it('skips a single corrupt record instead of dropping the whole portfolio', () => {
+    // A legacy-shaped record whose migration recompute will throw (null inputs).
+    const corrupt = { id: 'bad', stateCode: 'TX', coordinates: { lat: 1, lng: 1 }, inputs: null, analysis: { metrics: { flood: {} } } }
+    // A current v2 record (has a floodplain metric) that loads untouched.
+    const healthy = { id: 'good', stateCode: 'TX', coordinates: { lat: 30, lng: -97 }, inputs: { name: 'Fine' }, analysis: { metrics: { floodplain: { score: 90 } } }, screeningArea: { kind: 'point' }, createdAt: '', updatedAt: '' }
+    localStorage.setItem(STORAGE_KEY_V2, JSON.stringify([corrupt, healthy]))
+
+    const loaded = loadSites()
+    expect(loaded).toHaveLength(1)
+    expect(loaded[0].id).toBe('good')
+  })
+
+  it('returns an empty portfolio for malformed (non-array) stored data', () => {
+    localStorage.setItem(STORAGE_KEY_V2, JSON.stringify({ not: 'an array' }))
+    expect(loadSites()).toEqual([])
+  })
+
+  it('clearSavedSites removes both storage keys', () => {
+    localStorage.setItem(STORAGE_KEY_V2, '[]')
+    localStorage.setItem(STORAGE_KEY_V1, '[]')
+    clearSavedSites()
+    expect(localStorage.getItem(STORAGE_KEY_V2)).toBeNull()
+    expect(localStorage.getItem(STORAGE_KEY_V1)).toBeNull()
   })
 })

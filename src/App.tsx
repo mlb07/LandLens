@@ -16,6 +16,7 @@ import { getCoverageTelemetry } from './data/coverageProvider'
 import { rescreenSites, screenBatch, type BatchScreeningResult, type BatchScreeningRow } from './data/batchScreening'
 import { analyzeSite, SCORING_VERSION } from './lib/scoring'
 import { computePriceEconomics } from './lib/valuation'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { loadSites, saveSites } from './lib/storage'
 import { EMPTY_SITE_INPUTS, type BuildableEnvelopeSnapshot, type Coordinates, type ParcelSelection, type ParcelSnapshot, type SavedSite, type SiteAnalysis, type SiteInputs } from './types/site'
 import './App.css'
@@ -432,14 +433,16 @@ function App() {
   const liveNetAcres = (overlays?.buildableEnvelope.available ? overlays.buildableEnvelope.value?.adjustedNetAcres : undefined) ?? overlays?.netDevelopable?.netDevelopableAcres
   const priceEconomics = computePriceEconomics({ estimatedPrice: inputs.estimatedPrice, netAcres: liveNetAcres, grossAcres: inputs.acres, facts: parcel?.facts })
 
-  if (view === 'saved') return <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}><Suspense fallback={<div className="lazy-loading">Loading…</div>}><SavedSites sites={sites} onOpen={openSite} onReport={showReport} onDelete={deleteSite} onExplore={() => navigate('explorer')} onImportBatch={importBatch} onRescreenOutdated={rescreenOutdated} /></Suspense>{toast && <Toast message={toast} />}</AppFrame>
-  if (view === 'report' && reportSite) return <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}><Suspense fallback={<div className="lazy-loading">Loading…</div>}><SiteReport site={reportSite} onBack={() => navigate(reportReturnView)} /></Suspense></AppFrame>
+  if (view === 'saved') return <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}><ErrorBoundary variant="inline" title="the portfolio" resetKeys={[sites.length]}><Suspense fallback={<div className="lazy-loading">Loading…</div>}><SavedSites sites={sites} onOpen={openSite} onReport={showReport} onDelete={deleteSite} onExplore={() => navigate('explorer')} onImportBatch={importBatch} onRescreenOutdated={rescreenOutdated} /></Suspense></ErrorBoundary>{toast && <Toast message={toast} />}</AppFrame>
+  if (view === 'report' && reportSite) return <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}><ErrorBoundary variant="inline" title="the report" resetKeys={[reportSite.id]}><Suspense fallback={<div className="lazy-loading">Loading…</div>}><SiteReport site={reportSite} onBack={() => navigate(reportReturnView)} /></Suspense></ErrorBoundary></AppFrame>
 
   return (
     <AppFrame stateCode={activeStateCode} sitesCount={sites.length} active={view} mobileMenu={mobileMenu} setMobileMenu={setMobileMenu} onNavigate={navigate} onStateChange={changeState}>
       <main className="explorer-layout">
         <div className="map-column">
-          <MapExplorer key={activeStateCode} stateCode={activeStateCode} coordinates={coordinates} parcel={parcel} parcelLoading={parcelLoading} overlays={overlays} onSelect={selectCoordinates} onLocationLabel={setLocationLabel} />
+          <ErrorBoundary variant="inline" title="the map" resetKeys={[activeStateCode]}>
+            <MapExplorer key={activeStateCode} stateCode={activeStateCode} coordinates={coordinates} parcel={parcel} parcelLoading={parcelLoading} overlays={overlays} onSelect={selectCoordinates} onLocationLabel={setLocationLabel} />
+          </ErrorBoundary>
           <div className="map-site-strip">
             <div className="selected-coordinate-icon"><MapPin size={18} /></div>
             <div><span>Selected site</span><strong>{inputs.name || `Unnamed ${getStateDefinition(activeStateCode).name} location`}</strong><small className={`parcel-summary ${parcel?.status || 'loading'}`}>{parcelLoading ? 'Finding parcel boundary…' : parcel?.status === 'found' ? `${parcel.acres ? `${formatParcelAcres(parcel.acres)} acres · ` : ''}official parcel matched` : parcel?.message || 'Parcel boundary unavailable'}</small></div>
@@ -455,7 +458,9 @@ function App() {
             <button className={panelTab === 'details' ? 'active' : ''} onClick={() => setPanelTab('details')}><span>2</span> Site inputs</button>
           </div>
           <div className="panel-scroll" ref={panelScrollRef} tabIndex={0} aria-label={panelTab === 'details' ? 'Site inputs' : 'Site analysis'}>
-            {panelTab === 'details' ? <SiteForm inputs={inputs} parcel={parcel} jurisdiction={jurisdictionProfile} authority={officialData?.authority.value} coverage={getCoverageTelemetry(coordinates, activeStateCode)} nationalContext={analysis.nationalContext} onChange={updateInputs} onAnalyze={runAnalysis} dirty={dirty} /> : <ScorePanel analysis={analysis} dirty={dirty} loading={analysisLoading} pendingSources={sourcesPending} fetchedAt={officialData?.fetchedAt} parcelOverlaysLoading={overlaysLoading} hazards={hazards} priceEconomics={priceEconomics} />}
+            <ErrorBoundary variant="inline" title={panelTab === 'details' ? 'the input panel' : 'the analysis panel'} resetKeys={[coordinates.lat, coordinates.lng, currentId, panelTab]}>
+              {panelTab === 'details' ? <SiteForm inputs={inputs} parcel={parcel} jurisdiction={jurisdictionProfile} authority={officialData?.authority.value} coverage={getCoverageTelemetry(coordinates, activeStateCode)} nationalContext={analysis.nationalContext} onChange={updateInputs} onAnalyze={runAnalysis} dirty={dirty} /> : <ScorePanel analysis={analysis} dirty={dirty} loading={analysisLoading} pendingSources={sourcesPending} fetchedAt={officialData?.fetchedAt} parcelOverlaysLoading={overlaysLoading} hazards={hazards} priceEconomics={priceEconomics} />}
+            </ErrorBoundary>
           </div>
           <div className="panel-actions">
             <button className="secondary-button" onClick={reportCurrent}><FileText size={17} /> Report</button>

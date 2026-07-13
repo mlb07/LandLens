@@ -30,26 +30,40 @@ function migrateSite(site: SavedSite): SavedSite {
 export function loadSites(): SavedSite[] {
   try {
     const stored = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_KEY)
-    if (stored) {
-      const parsed = JSON.parse(stored) as Array<SavedSite & { isSample?: boolean }>
-      const migrated = parsed
-        .filter((site) => !site.isSample)
-        .map((site) => {
-          const cleanSite = { ...site }
-          delete cleanSite.isSample
-          return migrateSite(cleanSite)
-        })
-      // Persist to the v2 key and clear the legacy key so we do not re-migrate.
-      saveSites(migrated)
-      try { localStorage.removeItem(LEGACY_KEY) } catch { /* ignore */ }
-      return migrated
+    if (!stored) return []
+    const parsed = JSON.parse(stored) as Array<SavedSite & { isSample?: boolean }>
+    if (!Array.isArray(parsed)) return []
+    const migrated: SavedSite[] = []
+    for (const raw of parsed) {
+      if (raw?.isSample) continue
+      try {
+        const cleanSite = { ...raw }
+        delete cleanSite.isSample
+        migrated.push(migrateSite(cleanSite))
+      } catch {
+        // Skip a single corrupt record rather than discarding the whole portfolio.
+      }
     }
+    // Persist to the v2 key and clear the legacy key so we do not re-migrate.
+    // A persistence failure here must not lose the in-memory migrated list.
+    try {
+      saveSites(migrated)
+      localStorage.removeItem(LEGACY_KEY)
+    } catch { /* ignore — return what we migrated */ }
+    return migrated
   } catch {
     // Fall through to a clean portfolio when stored data is malformed or unavailable.
+    return []
   }
-  return []
 }
 
 export function saveSites(sites: SavedSite[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(sites))
+}
+
+// Escape hatch for the top-level error fallback: when a corrupt saved record
+// keeps crashing the app, the user can clear persisted sites and reload.
+export function clearSavedSites() {
+  localStorage.removeItem(STORAGE_KEY)
+  localStorage.removeItem(LEGACY_KEY)
 }

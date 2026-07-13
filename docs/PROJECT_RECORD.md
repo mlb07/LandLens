@@ -205,6 +205,13 @@ The official-data provider, scoring layer, and parcel-provider interface are sep
 
 ## Change log
 
+### 2026-07-13 — Error boundaries + storage resilience
+
+- **New `src/components/ErrorBoundary.tsx`**: a class boundary so one render error can no longer white-screen the app. Supports a full-page `variant` (catastrophic fallback with Try again / Reload / a confirm-gated "Reset saved data" escape hatch, and a dev-only stack trace) and an `inline` variant (a compact card that keeps the surrounding shell usable). `resetKeys` auto-recover a boundary when the user navigates or selects a new site; also supports `onError`, `onReset`, and a custom `fallback` render prop.
+- **Wired in depth**: one page boundary wraps the whole app in `main.tsx`; inline boundaries wrap each independently-recoverable region — the map, the analysis/input panel, the report, and the portfolio — each with appropriate `resetKeys`. A failure in one region leaves the header nav and the other regions fully functional.
+- **Storage hardening (`storage.ts`)**: `loadSites` now skips a single corrupt saved record instead of discarding the entire portfolio, ignores non-array payloads, and no longer loses the in-memory migrated list if the re-persist write fails. Added `clearSavedSites` for the fallback escape hatch.
+- **Tests**: 226 passing (was 216). Added `ErrorBoundary.test.tsx` (7 cases: child render, inline + page fallbacks, `onError`, Try-again recovery, `resetKeys` auto-reset, custom fallback) and 3 storage cases (corrupt-record skip, non-array payload, `clearSavedSites`). Verified both fallbacks live in-browser via temporary forced throws (since removed): the inline card contained an analysis-panel failure while the map/nav stayed live, "Try again" recovered cleanly, and the page card rendered with its stack trace and recovery controls.
+
 ### 2026-07-12 — Price-per-net-acre (land economics)
 
 - **New `src/lib/valuation.ts`**: `computePriceEconomics` derives cost per developable acre from the user's asking price and the parcel's usable acreage. Prefers verified net-developable acreage (`buildableEnvelope.adjustedNetAcres`), falls back to gross acres with an explicit `acreBasis` flag, and returns null when price or acreage is missing/non-positive (guards divide-by-zero on fully constrained parcels). Also computes `priceToAssessedRatio` against the parcel's *land* value (market → appraised → assessed), and ships `formatUsd`/`formatRatio` display helpers. Price never feeds the feasibility score — it is the buyer's variable, surfaced beside the score, not inside it.
